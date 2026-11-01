@@ -6,10 +6,10 @@
  * ========================================================================== */
 window.APP_CONFIG = {
   // Apps Script → Deploy → Manage deployments → Web app URL (ends with /exec)
-  API_URL: 'https://script.google.com/macros/s/AKfycbzQMvg-yOzGbPcbM43Xt1QucgPQLtUlUJp1fUWTdK2YtbLjIEhFmpvB4aEXtAkCyMQ/exec',
+  API_URL: 'https://script.google.com/macros/s/AKfycbxiXEZlx4xeY5-xWOU4afzCx7cKaYLVsDvAACLpVwC4rxRHyEhyWUQTdLkxAGKF4-M/exec',
 
   // Google Cloud Console → APIs & Services → Credentials → OAuth 2.0 Client ID (Web)
-        GOOGLE_CLIENT_ID: '770251395674-4cf3e1qb2qppp3hbpke2r2uqjk16d2eo.apps.googleusercontent.com',
+        GOOGLE_CLIENT_ID: '676386166698-m6lkakhva28q1f5h4nqdqrad0cg75cmj.apps.googleusercontent.com',
 
   APP_NAME: 'GLP-1 Care CRM',
   ORG_NAME: 'Justlife Healthcare',
