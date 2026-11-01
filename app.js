@@ -533,7 +533,7 @@
     opt = opt || {};
     if (!rows.length) return emptyState(opt.emptyText || 'No clients match these filters.', '🔍');
     var h = '<div class="table-wrap"><table class="table"><thead><tr><th>Client</th>' + (isAdmin() ? '<th>Company</th>' : '') +
-      '<th>Medication</th><th>Six-month journey</th><th>Status</th><th>Next refill</th><th>Registered</th>' + (opt.actions ? '<th></th>' : '') + '</tr></thead><tbody>';
+      '<th>Medication</th><th>Journey</th><th>Status</th><th>Next refill</th><th>Registered</th>' + (opt.actions ? '<th></th>' : '') + '</tr></thead><tbody>';
     rows.forEach(function (c) {
       h += '<tr class="clickable" data-action="open-client" data-id="' + esc(c.clientId) + '">' +
         '<td><div class="cell-title">' + esc(c.fullName) + '</div><div class="cell-sub">' + esc(c.externalClientId) + ' · ' + esc(c.phone) + '</div></td>' +
@@ -606,6 +606,7 @@
     var actions = (canRefill ? '<button class="btn btn-success" data-p="refill">＋ Record refill</button>' : '') +
       (canResched ? '<button class="btn" data-p="reschedule">📅 Reschedule</button>' : '') +
       (['Stopped', 'Completed'].indexOf(j.status) < 0 ? '<button class="btn" data-p="medication">💊 Update medication</button>' : '') +
+      (j.status !== 'Stopped' ? '<button class="btn ' + (j.awaitingReview || j.status === 'Completed' ? 'btn-blue' : '') + '" data-p="extend">⏩ Extend journey</button>' : '') +
       '<button class="btn" data-p="note">📝 Add note</button><button class="btn" data-p="doctor">🩺 Doctor note</button>';
     if (isAdmin()) {
       actions += '<button class="btn" data-p="edit">✏️ Edit client</button>';
@@ -637,7 +638,7 @@
       refill: function () { refillModal(p); }, reschedule: function () { rescheduleModal(p); }, medication: function () { medicationModal(p); },
       note: function () { noteModal(p); }, doctor: function () { doctorNoteModal(p); }, edit: function () { editClientModal(p); },
       pause: function () { journeyStatusModal(p, 'Paused'); }, stop: function () { journeyStatusModal(p, 'Stopped'); }, reactivate: function () { journeyStatusModal(p, 'Active'); },
-      complete: function () { completionModal(p); }
+      complete: function () { completionModal(p); }, extend: function () { extendModal(p); }
     };
     $$('[data-p]', m.el).forEach(function (b) { b.addEventListener('click', handlers[b.getAttribute('data-p')]); });
     bindProfileTab(p);
@@ -655,10 +656,11 @@
   function profileTab(tab, p) {
     var v = p.view, j = v.journey, c = p.client;
     if (tab === 'overview') {
-      return '<div class="card"><div class="card-head"><h2>Six-month journey</h2><span class="muted small">' + fmtDate(j.startDate) + ' → ' + fmtDate(j.endDate) + '</span></div><div class="card-body stack">' +
+      return '<div class="card"><div class="card-head"><h2>' + (j.months === 6 ? 'Six' : j.months) + '-month journey</h2><span class="muted small">' + fmtDate(j.startDate) + ' → ' + fmtDate(j.endDate) + '</span></div><div class="card-body stack">' +
         journeyBar(j, true) +
         kv([['Journey start', fmtDate(j.startDate), 1], ['Expected end', fmtDate(j.endDate), 1], ['Current month', j.currentMonth ? j.currentMonth + ' of ' + j.months : 'Not started'],
           ['Completed months', j.completedMonths], ['Remaining months', j.remainingMonths], ['Months supplied', j.milestones + ' of ' + j.months],
+          ['Journey length', j.months + ' months' + (p.journey && Number(p.journey.Extension_Count) ? ' (extended ' + p.journey.Extension_Count + '× from ' + p.journey.Original_Duration_Months + ')' : '')],
           ['Completion', j.percent + '%'], ['Next refill', j.nextRefillDate ? fmtDate(j.nextRefillDate) + ' (refill #' + j.nextRefillCycle + ')' : '—', 1], ['Journey status', statusBadge(j), 1]]) +
         (p.journey && p.journey.Completion_Confirmed === 'TRUE' ? '<div class="alert alert-success">Completion confirmed by ' + esc(p.journey.Completion_Confirmed_By) + ' on ' + fmtDateTime(p.journey.Completion_Confirmed_At) + '. ' + esc(p.journey.Completion_Note) + '</div>' : '') +
         '</div></div>' +
@@ -888,6 +890,49 @@
     });
   }
 
+  function extendModal(p) {
+    var j = p.view.journey, max = 24 - j.months;
+    if (max < 1) return toast('This journey is already at the 24-month maximum', 'error');
+    var needsDate = !j.nextScheduleId;
+    var lastRefill = p.refills.length ? p.refills[p.refills.length - 1].Refill_Date : p.client.Journey_Start_Date;
+    var interval = Number(p.client.Refill_Interval_Days || state.meta.defaultRefillIntervalDays);
+    var dflt = addDays(lastRefill, interval); if (dflt < todayStr()) dflt = todayStr();
+    var monthsOpts = []; for (var i = 1; i <= Math.min(12, max); i++) monthsOpts.push({ value: i, label: i + ' month' + (i > 1 ? 's' : '') + ' → ' + (j.months + i) + '-month journey' });
+    formModal({
+      title: 'Extend journey', size: 'md', submitLabel: 'Extend journey',
+      subtitle: esc(p.view.fullName) + ' · currently ' + j.months + ' months · ends ' + fmtDate(j.endDate),
+      body: (j.status === 'Completed' ? '<div class="alert alert-warn">This journey was marked completed. Extending it reopens it as Active; the completion stays in the history.</div>' : '') +
+        '<div class="form-grid">' +
+        field({ name: 'months', label: 'Extend by', type: 'select', required: true, options: monthsOpts, value: 1 }) +
+        field({ name: 'reason', label: 'Reason', type: 'select', required: true, options: ['Client wants to continue', 'Doctor recommendation', 'Weight goal not yet reached', 'Maintenance phase', 'Other'] }) +
+        (needsDate ? field({ name: 'nextRefillDate', label: 'Next refill date', type: 'date', required: true, value: dflt, hint: 'All refills of the current journey are done, so the next one is scheduled now' }) : '') +
+        field({ name: 'note', label: 'Note (mandatory)', type: 'textarea', required: true, full: true }) + '</div>',
+      onSubmit: function (d) {
+        d.clientId = p.view.clientId;
+        return api('journey.extend', d, { requestId: uuid() }).then(function (r) { afterChange('Journey extended to ' + r.months + ' months · ends ' + fmtDate(r.expectedEndDate)); });
+      }
+    });
+  }
+
+  /* ---------- cohort retention triangle ---------- */
+  function cohortCard(r) {
+    var head = '<div class="card"><div class="card-head"><h2>Cohort retention triangle</h2></div><div class="card-body stack">' +
+      '<p class="muted small" style="margin:0">Read across each row: of clients who started in that month, what % had a completed refill k months later. A cell stays blank until its month starts, shows a dashed “so far” % while that month is running, and a solid final % once it has ended. A rescheduled refill counts in the month it actually happened, and a client who refills twice in one month counts once.' + (isAdmin() ? ' Follows the company filter above.' : '') + '</p>';
+    if (!r.years.length) return head + emptyState('No clients yet', '📈') + '</div></div>';
+    var cols = ''; for (var k = 1; k <= r.maxMonths; k++) cols += '<th class="num">Month ' + k + '</th>';
+    return head + r.years.map(function (y) {
+      return '<div><h3 style="margin-bottom:8px">' + esc(y.year) + '</h3><div class="table-wrap"><table class="table cohort"><thead><tr><th>Cohort (first month)</th><th class="num">Users</th>' + cols + '</tr></thead><tbody>' +
+        y.rows.map(function (row) {
+          return '<tr><td class="strong nowrap">' + monthLabel(row.month).replace(/ (\d\d)$/, ' 20$1') + '</td><td class="num">' + num(row.users) + '</td>' + row.cells.map(function (c) {
+            if (c.state === 'future') return '<td class="num muted">—</td>';
+            var alpha = 0.12 + (c.pct || 0) / 100 * 0.7;
+            var style = 'background:rgba(249,115,22,' + (c.state === 'partial' ? alpha * 0.6 : alpha).toFixed(2) + ');' + (alpha > 0.55 && c.state === 'final' ? 'color:#fff;' : '');
+            return '<td class="num cohort-cell ' + c.state + '" style="' + style + '" title="' + c.count + ' of ' + row.users + ' clients">' + c.pct + '%' + (c.state === 'partial' ? '<div class="so-far">so far · ' + c.count + '/' + row.users + '</div>' : '') + '</td>';
+          }).join('') + '</tr>';
+        }).join('') + '</tbody></table></div></div>';
+    }).join('') + '</div></div>';
+  }
+
   /* ---------- admin-only client actions ---------- */
   function editClientModal(p) {
     var c = p.client;
@@ -1042,8 +1087,8 @@
    * ========================================================================= */
   function partnerDashboard(root) {
     setHeader('Dashboard', state.user.companyName + ' · ' + fmtDate(todayStr()), '<button class="btn btn-primary" data-action="register-client">＋ <span class="lbl">Register client</span></button>');
-    Promise.all([api('dashboard.summary'), api('refills.board'), api('notifications.list')]).then(function (r) {
-      var s = r[0], b = r[1].buckets, n = r[2].notifications;
+    Promise.all([api('dashboard.summary'), api('refills.board'), api('notifications.list'), api('reports.cohort')]).then(function (r) {
+      var s = r[0], b = r[1].buckets, n = r[2].notifications, cohort = r[3];
       root.innerHTML = '<div class="kpis">' +
         kpi('Total registered clients', num(s.totalClients), 'navy', '', 'go-clients') +
         kpi('Active GLP clients', num(s.active), '', s.paused ? s.paused + ' paused' : '', 'go-active') +
@@ -1055,7 +1100,7 @@
         kpi('Refills completed', num(s.refillsCompleted), 'green') +
         kpi('Total collected', money(s.collected, s.currency), 'purple', s.pendingAmount ? money(s.pendingAmount, s.currency) + ' pending' : 'Paid transactions only') + '</div>' +
         (n.length ? '<div class="card"><div class="card-head"><h2>🔔 Reminders</h2><span class="muted small">' + s.unreadNotifications + ' unread</span><button class="btn btn-sm" data-action="go" data-view="notifications">View all</button></div><div class="card-body flush">' + notificationTable(n.slice(0, 6)) + '</div></div>' : '') +
-        '<div class="board">' + boardCol('Overdue', 'red', b.overdue, 'open', 'No overdue refills 🎉') + boardCol('Due today', 'orange', b.today, 'open', 'Nothing due today') + boardCol('Due this week', 'orange', b.thisWeek, 'open', 'Nothing else this week') + '</div>';
+        '<div class="board">' + boardCol('Overdue', 'red', b.overdue, 'open', 'No overdue refills 🎉') + boardCol('Due today', 'orange', b.today, 'open', 'Nothing due today') + boardCol('Due this week', 'orange', b.thisWeek, 'open', 'Nothing else this week') + '</div>' + cohortCard(cohort);
       $$('.kpi[data-action]', root).forEach(function (k) {
         var map = { 'go-clients': ['clients', {}], 'go-active': ['clients', { status: 'Active' }], 'go-refills': ['refills', {}], 'go-overdue': ['clients', { status: 'Overdue' }] };
         var t = map[k.getAttribute('data-action')];
@@ -1103,7 +1148,7 @@
       destroyCharts();
       $('#perf').innerHTML = skeleton(8);
       var f = readForm(form);
-      Promise.all([api('reports.performance', f), api('client.list', { awaitingReview: true, companyId: f.companyId })]).then(function (r) { renderPerformance(r[0], r[1].clients); })
+      Promise.all([api('reports.performance', f), api('client.list', { awaitingReview: true, companyId: f.companyId }), api('reports.cohort', { companyId: f.companyId })]).then(function (r) { renderPerformance(r[0], r[1].clients); $('#perf .stack').insertAdjacentHTML('beforeend', cohortCard(r[2])); })
         .catch(function (e) { $('#perf').innerHTML = errorBlock(e); });
     };
     form.addEventListener('change', load);
