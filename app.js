@@ -1342,7 +1342,7 @@
     setHeader('Admin users', 'Justlife Google Workspace accounts with full access', '<button class="btn btn-primary" data-add-admin>＋ <span class="lbl">Add admin</span></button>');
     api('admin.list').then(function (r) {
       var list = r.admins;
-      root.innerHTML = '<div class="alert alert-info">Admins sign in with Google. Only verified @justlife.com Workspace accounts listed here as <b>Active</b> can access the admin dashboard. Deactivating an admin ends their session immediately.</div>' +
+      root.innerHTML = '<div class="alert alert-info">Admins sign in with Google. Any verified @justlife.com account can sign in and is added here automatically (setting <b>ADMIN_ACCESS</b>). Set it to LISTED_ADMINS_ONLY to allow only the accounts below. <b>Deactivate</b> someone to block them; that ends their session immediately.</div>' +
         '<div class="card"><div class="card-body flush"><div class="table-wrap"><table class="table"><thead><tr><th>Admin</th><th>Role</th><th>Status</th><th>Last login</th><th>Created</th><th></th></tr></thead><tbody>' +
         list.map(function (a) {
           var me = a.Admin_ID === state.user.id;
@@ -1416,7 +1416,7 @@
   function adminSettings(root) {
     setHeader('System settings', 'Journey, refill, reporting and reminder configuration');
     api('settings.get').then(function (r) {
-      var enumOpts = { CONVERSION_MODE: ['MIN_REFILLS', 'PAID_REGISTRATION'], CONVERSION_DENOMINATOR: ['ELIGIBLE', 'REGISTERED'], REMINDER_EMAILS_ENABLED: ['TRUE', 'FALSE'] };
+      var enumOpts = { CONVERSION_MODE: ['MIN_REFILLS', 'PAID_REGISTRATION'], CONVERSION_DENOMINATOR: ['ELIGIBLE', 'REGISTERED'], REMINDER_EMAILS_ENABLED: ['TRUE', 'FALSE'], ADMIN_ACCESS: ['ANY_COMPANY_ACCOUNT', 'LISTED_ADMINS_ONLY'] };
       var numeric = ['JOURNEY_MONTHS', 'DEFAULT_REFILL_INTERVAL_DAYS', 'SESSION_TTL_MINUTES', 'OVERDUE_GRACE_DAYS', 'CONVERSION_MIN_REFILLS', 'PASSWORD_MIN_LENGTH'];
       root.innerHTML = '<div class="card"><div class="card-body"><form class="form" id="settings-form"><div class="form-grid">' +
         r.settings.map(function (s) {
