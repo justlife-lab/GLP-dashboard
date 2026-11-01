@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://cdnjs.cloudflare.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; connect-src https://script.google.com https://script.googleusercontent.com; img-src 'self' data:; base-uri 'self'; form-action 'self'">
+  <meta name="referrer" content="strict-origin-when-cross-origin">
+  <title>Partner Portal · GLP-1 Care CRM · Justlife Healthcare</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body data-portal="partner">
+  <div id="top-loader" class="top-loader" aria-hidden="true"></div>
+
+  <!-- PARTNER LOGIN (credentials issued by Justlife admin) -->
+  <section id="login-screen" class="login-screen" hidden>
+    <div class="login-card">
+      <div class="brand brand-lg">
+        <span class="brand-mark" aria-hidden="true">JL</span>
+        <div><div class="brand-name">Justlife Healthcare</div><div class="brand-sub">GLP-1 Care · Partner Portal</div></div>
+      </div>
+      <h1>Partner sign in</h1>
+      <p class="muted">Sign in with the username and password provided by Justlife.</p>
+      <form id="partner-login-form" class="form" autocomplete="on" novalidate>
+        <label class="field"><span>Username</span><input name="username" autocomplete="username" required maxlength="60" autocapitalize="none" spellcheck="false"></label>
+        <label class="field"><span>Password</span><input name="password" type="password" autocomplete="current-password" required maxlength="128"></label>
+        <div id="login-error" class="alert alert-error" hidden></div>
+        <button class="btn btn-primary btn-block" type="submit">Sign in</button>
+      </form>
+      <p class="login-foot muted">Forgot your password? Ask your Justlife account manager to reset it.</p>
+    </div>
+  </section>
+
+  <!-- APP SHELL -->
+  <div id="app" class="app" hidden>
+    <aside id="sidebar" class="sidebar" aria-label="Main navigation">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true">JL</span>
+        <div><div class="brand-name">Justlife</div><div class="brand-sub" id="brand-company">Partner Portal</div></div>
+      </div>
+      <nav id="nav" class="nav"></nav>
+      <div class="sidebar-foot"><div id="user-box" class="user-box"></div></div>
+    </aside>
+    <div id="sidebar-backdrop" class="sidebar-backdrop" data-action="toggle-sidebar"></div>
+    <main class="main">
+      <header class="topbar">
+        <button class="icon-btn menu-btn" data-action="toggle-sidebar" aria-label="Open menu">☰</button>
+        <div class="topbar-title"><h1 id="view-title">Dashboard</h1><div id="view-sub" class="muted small"></div></div>
+        <div id="topbar-actions" class="topbar-actions"></div>
+      </header>
+      <div id="view" class="view" tabindex="-1"></div>
+    </main>
+  </div>
+
+  <div id="modal-root"></div>
+  <div id="toast-root" class="toast-root" aria-live="polite"></div>
+
+  <script src="config.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
