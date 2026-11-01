@@ -426,6 +426,7 @@
       { id: 'clients', label: 'Clients', ico: '👥' },
       { id: 'refills', label: 'Refills & Reminders', ico: '💊', count: 'overdue' },
       { id: 'payments', label: 'Upsell & Payments', ico: '💳' },
+      { id: 'upsell', label: 'Upsell Creation', ico: '🧾', count: 'upsellPending' },
       { section: 'Administration' },
       { id: 'companies', label: 'Companies & Partners', ico: '🏥' },
       { id: 'admins', label: 'Admin Users', ico: '🛡️' },
@@ -496,7 +497,12 @@
   }
   window.addEventListener('hashchange', route);
   function refreshCounts() {
-    api('dashboard.summary', {}).then(function (s) { renderNav({ overdue: s.refillsOverdue, unread: s.unreadNotifications }); }).catch(function () {});
+    var calls = [api('dashboard.summary', {})];
+    if (isAdmin()) calls.push(api('upsell.list', { preset: 'all', upsellStatus: 'Pending' }));
+    Promise.all(calls).then(function (r) {
+      var s = r[0], up = r[1];
+      renderNav({ overdue: s.refillsOverdue, unread: s.unreadNotifications, upsellPending: up ? up.counts.registrations.pending + up.counts.refills.pending : 0 });
+    }).catch(function () {});
   }
   function refreshAll() { if (state.refresh) state.refresh(); refreshCounts(); }
 
@@ -798,7 +804,7 @@
         section('Refill', [
           { name: 'clientLabel', label: 'Client name & ID', value: v.fullName + ' (' + v.externalClientId + ')', readonly: true },
           { name: 'refillDate', label: 'Refill date', type: 'date', required: true, value: t, max: t },
-          { name: 'bookingRef', label: 'Booking reference ID', required: true, maxlength: 60 },
+          { name: 'bookingRefLabel', label: 'Booking reference ID', value: c.First_Booking_Ref, readonly: true, hint: 'Same reference as the first booking' },
           { name: 'quantity', label: 'Medicine amount / quantity', required: true, maxlength: 60 }
         ]) +
         '<div class="form-section"><h3>Medication</h3>' + field({ name: 'noChange', label: 'No change – same medication and dosage (' + c.Current_Medication_Name + ' · ' + c.Current_Dosage + ')', type: 'checkbox', value: true }) +
@@ -829,7 +835,7 @@
         form.refillDate.addEventListener('change', function () { if (form.nextRefillDate && form.refillDate.value) form.nextRefillDate.value = addDays(form.refillDate.value, interval); });
       },
       onSubmit: function (d, rid) {
-        delete d.clientLabel; delete d.lastInfo;
+        delete d.clientLabel; delete d.lastInfo; delete d.bookingRefLabel;
         if (!isAdmin()) delete d.paymentDate;
         d.clientId = v.clientId;
         if (d.noChange) { delete d.medicationType; delete d.medicationName; delete d.dosage; }
@@ -1265,6 +1271,91 @@
       rows.map(function (r) { return '<tr>' + r.map(function (c, i) { return '<td' + (i > 0 && typeof c === 'string' && /^[A-Z]{3} |^[\d,]+$/.test(c) ? ' class="num"' : '') + '>' + c + '</td>'; }).join('') + '</tr>'; }).join('') + '</tbody></table></div>';
   }
 
+  /* ---------- Upsell creation worklist ---------- */
+  function adminUpsell(root) {
+    var companies = (state.meta.companies || []).map(function (c) { return { value: c.id, label: c.name }; });
+    var preset = 'all', tab = state.params.tab === 'refills' ? 'refills' : 'registrations', data = null, selected = {};
+    setHeader('Upsell creation', 'New registrations and refills to create as upsells');
+    root.innerHTML = '<div class="card"><div class="card-body stack"><div class="chips" id="up-presets">' +
+      [['all', 'All time'], ['today', 'Today'], ['this_week', 'This week'], ['last_week', 'Last week'], ['this_month', 'This month'], ['last_month', 'Last month'], ['custom', 'Custom range']].map(function (x) { return '<button type="button" class="chip ' + (x[0] === preset ? 'active' : '') + '" data-preset="' + x[0] + '">' + x[1] + '</button>'; }).join('') +
+      '</div><form class="toolbar" id="up-filters">' + field({ name: 'from', label: 'From', type: 'date' }) + field({ name: 'to', label: 'To', type: 'date' }) +
+      field({ name: 'companyId', label: 'Company', type: 'select', options: companies, placeholder: 'All companies' }) +
+      field({ name: 'upsellStatus', label: 'Upsell status', type: 'select', options: [{ value: 'Pending', label: 'Pending upsell' }, { value: 'Created', label: 'Upsell created' }], value: 'Pending', placeholder: 'All' }) +
+      '</form></div></div><div id="up-body">' + skeleton(4) + '</div>';
+    var form = $('#up-filters');
+    var load = function () {
+      form.from.disabled = form.to.disabled = preset !== 'custom';
+      var f = readForm(form); f.preset = preset;
+      if (preset === 'custom' && (!f.from || !f.to)) { $('#up-body').innerHTML = '<div class="alert alert-info">Choose a from and to date.</div>'; return; }
+      api('upsell.list', f).then(function (r) { data = r; selected = {}; form.from.value = r.from; form.to.value = r.to; render(); }).catch(function (e) { $('#up-body').innerHTML = errorBlock(e); });
+    };
+    var list = function () { return tab === 'refills' ? data.refills : data.registrations; };
+    var type = function () { return tab === 'refills' ? 'refill' : 'registration'; };
+    var exportRowsFor = function (rows) {
+      return rows.map(function (x) {
+        var o = { 'Ref ID': x.bookingRef, 'Client name': x.name, 'Client ID': x.externalClientId, 'Phone': x.phone, 'Company': x.companyName };
+        if (x.type === 'registration') { o['Start date'] = x.startDate; o['Registration date'] = x.registrationDate; }
+        else { o['Refill #'] = x.cycle; o['Refill date'] = x.refillDate; }
+        o['Medication'] = x.medication; o['Amount (' + data.currency + ')'] = x.amount; o['Payment status'] = x.paymentStatus; o['Upsell status'] = x.upsellStatus;
+        return o;
+      });
+    };
+    var mark = function (ids, status) {
+      if (!ids.length) return toast('Select at least one row', 'error');
+      return api('upsell.mark', { type: type(), ids: ids, status: status }, { requestId: uuid() })
+        .then(function (r) { toast(r.updated + ' row(s) marked as ' + (status === 'Created' ? 'upsell created' : 'pending'), 'success'); load(); refreshCounts(); })
+        .catch(function (e) { toast(e.message, 'error'); });
+    };
+    function render() {
+      var c = data.counts, rows = list(), cur = data.currency, isReg = tab === 'registrations';
+      var selCount = Object.keys(selected).length;
+      $('#up-body').innerHTML = '<div class="stack"><div class="kpis">' +
+        kpi('New clients registered', num(c.registrations.total), 'navy', money(c.registrations.amount, cur) + ' collected (paid)') +
+        kpi('Registrations – pending upsell', num(c.registrations.pending), 'orange') + kpi('Registrations – upsell created', num(c.registrations.created), 'green') +
+        kpi('Refills', num(c.refills.total), 'navy', money(c.refills.amount, cur) + ' collected (paid)') +
+        kpi('Refills – pending upsell', num(c.refills.pending), 'orange') + kpi('Refills – upsell created', num(c.refills.created), 'green') + '</div>' +
+        '<div class="card"><div class="tabs" style="padding:0 12px"><button class="tab ' + (isReg ? 'active' : '') + '" data-uptab="registrations">New registrations (' + data.registrations.length + ')</button><button class="tab ' + (!isReg ? 'active' : '') + '" data-uptab="refills">Refills (' + data.refills.length + ')</button></div>' +
+        '<div class="card-head"><span class="muted small grow">' + (data.from ? fmtDate(data.from) + ' → ' + fmtDate(data.to) : 'All time') + ' · ' + rows.length + ' rows · ' + selCount + ' selected</span>' +
+        '<button class="btn btn-sm" data-up-download>⬇ Download ' + (selCount ? 'selected' : 'list') + ' (Excel)</button>' +
+        '<button class="btn btn-sm btn-success" data-up-mark="Created">✓ Mark ' + (selCount ? 'selected' : 'all shown') + ' as upsell created</button>' +
+        '<button class="btn btn-sm" data-up-mark="Pending">↺ Mark ' + (selCount ? 'selected' : 'all shown') + ' as pending</button></div>' +
+        '<div class="card-body flush">' + (rows.length ? '<div class="table-wrap"><table class="table"><thead><tr><th><input type="checkbox" data-up-all aria-label="Select all"' + (selCount && selCount === rows.length ? ' checked' : '') + '></th>' +
+          '<th>Ref ID</th><th>Client</th><th>Company</th>' + (isReg ? '<th>Start date</th><th>Registered</th>' : '<th>Refill #</th><th>Refill date</th>') + '<th>Medication</th><th class="num">Amount</th><th>Payment</th><th>Upsell</th><th></th></tr></thead><tbody>' +
+          rows.map(function (x) {
+            return '<tr><td><input type="checkbox" data-up-row="' + esc(x.id) + '"' + (selected[x.id] ? ' checked' : '') + ' aria-label="Select"></td><td class="mono strong">' + esc(x.bookingRef) + '</td>' +
+              '<td><div class="cell-title">' + esc(x.name) + '</div><div class="cell-sub">' + esc(x.externalClientId) + ' · ' + esc(x.phone) + '</div></td><td>' + esc(x.companyName) + '</td>' +
+              (isReg ? '<td class="nowrap">' + fmtDate(x.startDate) + '</td><td class="nowrap">' + fmtDate(x.registrationDate) + '</td>' : '<td>#' + esc(x.cycle) + '</td><td class="nowrap">' + fmtDate(x.refillDate) + '</td>') +
+              '<td>' + esc(x.medication) + '</td><td class="num strong">' + money(x.amount, cur) + '</td><td>' + (x.paymentStatus ? badge(x.paymentStatus) : '—') + '</td>' +
+              '<td>' + (x.upsellStatus === 'Created' ? badge('Created', 'green') + '<div class="cell-sub">' + fmtDateTime(x.upsellUpdatedAt) + '</div>' : badge('Pending', 'orange')) + '</td>' +
+              '<td><button class="btn btn-sm" data-up-one="' + esc(x.id) + '" data-to="' + (x.upsellStatus === 'Created' ? 'Pending' : 'Created') + '">' + (x.upsellStatus === 'Created' ? 'Undo' : '✓ Created') + '</button></td></tr>';
+          }).join('') + '</tbody></table></div>' : emptyState('No ' + (isReg ? 'registrations' : 'refills') + ' for these filters', '🧾')) + '</div></div></div>';
+      $$('[data-uptab]').forEach(function (b) { b.onclick = function () { tab = b.getAttribute('data-uptab'); selected = {}; render(); }; });
+      $$('[data-up-row]').forEach(function (cb) { cb.onchange = function () { var id = cb.getAttribute('data-up-row'); if (cb.checked) selected[id] = 1; else delete selected[id]; render(); }; });
+      var all = $('[data-up-all]'); if (all) all.onchange = function () { selected = {}; if (all.checked) rows.forEach(function (x) { selected[x.id] = 1; }); render(); };
+      $$('[data-up-one]').forEach(function (b) { b.onclick = function () { mark([b.getAttribute('data-up-one')], b.getAttribute('data-to')); }; });
+      var targetIds = function () { var s = Object.keys(selected); return s.length ? s : rows.map(function (x) { return x.id; }); };
+      $$('[data-up-mark]').forEach(function (b) {
+        b.onclick = function () {
+          var ids = targetIds(), to = b.getAttribute('data-up-mark');
+          confirmBox({ title: 'Mark ' + ids.length + ' row(s) as ' + (to === 'Created' ? 'upsell created' : 'pending') + '?', message: 'This updates the ' + (isReg ? 'registration' : 'refill') + ' records and is recorded in the audit log.', confirmLabel: 'Mark ' + ids.length })
+            .then(function (ok) { if (ok) mark(ids, to); });
+        };
+      });
+      $('[data-up-download]').onclick = function () {
+        var ids = targetIds(), set = {}; ids.forEach(function (i) { set[i] = 1; });
+        var picked = rows.filter(function (x) { return set[x.id]; });
+        if (!picked.length) return toast('Nothing to download', 'error');
+        exportRows(exportRowsFor(picked), 'upsell-' + tab + '-' + (data.from || 'all') + '-' + data.to, 'xlsx');
+        var pend = picked.filter(function (x) { return x.upsellStatus === 'Pending'; }).map(function (x) { return x.id; });
+        if (pend.length) confirmBox({ title: 'Mark downloaded rows as upsell created?', message: pend.length + ' of the downloaded rows are still pending. Mark them as upsell created now?', confirmLabel: 'Yes, mark ' + pend.length + ' as created' })
+          .then(function (ok) { if (ok) mark(pend, 'Created'); });
+      };
+    }
+    $$('[data-preset]', root).forEach(function (b) { b.addEventListener('click', function () { preset = b.getAttribute('data-preset'); $$('[data-preset]', root).forEach(function (x) { x.classList.toggle('active', x === b); }); load(); }); });
+    form.addEventListener('change', load);
+    load();
+  }
+
   /* ---------- Companies & partner users ---------- */
   function adminCompanies(root) {
     setHeader('Companies & partners', 'Partner companies and their login accounts', '<button class="btn btn-primary" data-add-company>＋ <span class="lbl">Add company</span></button>');
@@ -1485,7 +1576,7 @@
     }).catch(function (e) { root.innerHTML = errorBlock(e); });
   }
 
-  VIEWS.admin = { dashboard: adminDashboard, clients: viewClients, refills: viewRefills, payments: adminPayments, companies: adminCompanies, admins: adminUsers, audit: adminAudit, settings: adminSettings };
+  VIEWS.admin = { dashboard: adminDashboard, clients: viewClients, refills: viewRefills, payments: adminPayments, upsell: adminUpsell, companies: adminCompanies, admins: adminUsers, audit: adminAudit, settings: adminSettings };
   VIEWS.partner = { dashboard: partnerDashboard, clients: viewClients, refills: viewRefills, notifications: partnerNotifications, account: partnerAccount };
 
   /* ===========================================================================
