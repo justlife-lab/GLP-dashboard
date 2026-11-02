@@ -178,7 +178,7 @@
     else input = '<input id="' + id + '" type="' + (f.type || 'text') + '" name="' + esc(f.name) + '" value="' + esc(v) + '"' + req + ro + dis + extra + '>';
     return '<label class="field ' + (f.full ? 'full' : '') + '" for="' + id + '"><span>' + esc(f.label) + (f.required ? ' <b class="req">*</b>' : '') + '</span>' + input + (f.hint ? '<small class="hint">' + esc(f.hint) + '</small>' : '') + '</label>';
   }
-  function section(title, fields) { return '<div class="form-section"><h3>' + esc(title) + '</h3><div class="form-grid">' + fields.map(field).join('') + '</div></div>'; }
+  function section(title, fields) { return '<div class="form-section"><h3>' + esc(title) + '</h3><div class="form-grid">' + fields.map(function (f) { return f.name === '__doctor__' ? doctorField(f.opts || {}) : field(f); }).join('') + '</div></div>'; }
   function readForm(form) {
     var o = {};
     $$('input, select, textarea', form).forEach(function (el) {
@@ -284,6 +284,64 @@
     });
     state.charts.push(c);
   }
+  /* One stacked bar per partner: New registrations + Refills, labelled inside with AED, count and %. */
+  var stackLabels = {
+    id: 'stackLabels',
+    afterDatasetsDraw: function (chart) {
+      var ctx = chart.ctx, info = chart.options.plugins.stackLabels;
+      if (!info) return;
+      ctx.save(); ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      chart.data.labels.forEach(function (lbl, i) {
+        var total = 0, top = null;
+        chart.data.datasets.forEach(function (ds, di) {
+          var meta = chart.getDatasetMeta(di); if (meta.hidden) return;
+          var bar = meta.data[i], v = ds.data[i] || 0; total += v;
+          if (!bar || !v) return;
+          var h = Math.abs(bar.base - bar.y), pct = info.totals[i] ? Math.round(v / info.totals[i] * 100) : 0;
+          top = top === null ? bar.y : Math.min(top, bar.y);
+          ctx.fillStyle = '#fff';
+          if (h >= 46) {
+            ctx.font = '700 12px "Plus Jakarta Sans", sans-serif'; ctx.fillText(money(v), bar.x, bar.y + h / 2 - 15);
+            ctx.font = '500 11px "Plus Jakarta Sans", sans-serif'; ctx.fillText(ds.counts[i] + ' ' + ds.unit, bar.x, bar.y + h / 2);
+            ctx.font = '800 12px "Plus Jakarta Sans", sans-serif'; ctx.fillText(pct + '%', bar.x, bar.y + h / 2 + 15);
+          } else if (h >= 16) { ctx.font = '700 11px "Plus Jakarta Sans", sans-serif'; ctx.fillText(pct + '% · ' + ds.counts[i], bar.x, bar.y + h / 2); }
+        });
+        if (top !== null) {
+          var meta0 = chart.getDatasetMeta(0), x = meta0.data[i].x;
+          ctx.fillStyle = '#0B2545'; ctx.font = '800 12.5px "Plus Jakarta Sans", sans-serif';
+          ctx.fillText('Total ' + money(total), x, top - 20);
+          ctx.font = '500 11px "Plus Jakarta Sans", sans-serif'; ctx.fillStyle = '#64748B';
+          ctx.fillText((info.clients[i] || 0) + ' new · ' + (info.refills[i] || 0) + ' refills', x, top - 7);
+        }
+      });
+      ctx.restore();
+    }
+  };
+  function partnerStackChart(id, rows) {
+    var el = document.getElementById(id);
+    if (!el) return;
+    if (!window.Chart) { el.parentNode.innerHTML = '<div class="chart-fallback">Charts unavailable</div>'; return; }
+    if (!rows.length) { el.parentNode.innerHTML = '<div class="chart-fallback">No data for the selected filters</div>'; return; }
+    var totals = rows.map(function (x) { return (x.regAmount || 0) + (x.refillAmount || 0); });
+    var c = new Chart(el, {
+      type: 'bar',
+      data: { labels: rows.map(function (x) { return x.companyName; }), datasets: [
+        { label: 'New registrations', data: rows.map(function (x) { return x.regAmount || 0; }), counts: rows.map(function (x) { return x.regCount || 0; }), unit: 'new clients', backgroundColor: '#0B2545', borderRadius: 6, maxBarThickness: 110 },
+        { label: 'Refills', data: rows.map(function (x) { return x.refillAmount || 0; }), counts: rows.map(function (x) { return x.refillCount || 0; }), unit: 'refills', backgroundColor: '#2563EB', borderRadius: 6, maxBarThickness: 110 }] },
+      options: {
+        responsive: true, maintainAspectRatio: false, layout: { padding: { top: 34 } },
+        plugins: {
+          legend: { position: 'bottom', labels: { boxWidth: 12, usePointStyle: true } },
+          stackLabels: { totals: totals, clients: rows.map(function (x) { return x.regCount || 0; }), refills: rows.map(function (x) { return x.refillCount || 0; }) },
+          tooltip: { callbacks: { label: function (ctx) { var ds = ctx.dataset, i = ctx.dataIndex, v = ds.data[i]; return ' ' + ds.label + ': ' + money(v) + ' · ' + ds.counts[i] + ' ' + ds.unit + ' · ' + (totals[i] ? Math.round(v / totals[i] * 100) : 0) + '%'; } } }
+        },
+        scales: { x: { stacked: true, grid: { display: false } }, y: { stacked: true, beginAtZero: true, grid: { color: '#EEF2F7' }, ticks: { callback: function (v) { return v >= 1000 ? (v / 1000) + 'k' : v; } } } }
+      },
+      plugins: [stackLabels]
+    });
+    state.charts.push(c);
+  }
+
   function monthLabel(k) { var p = k.split('-'); return MONTHS[+p[1] - 1] + ' ' + p[0].slice(2); }
 
   /* ---------- export ---------- */
@@ -562,7 +620,7 @@
       (isAdmin() ? '<button class="btn" data-action="export" data-dataset="clients">⬇ <span class="lbl">Export</span></button>' : '') +
       '<button class="btn btn-primary" data-action="register-client">＋ <span class="lbl">Register client</span></button>');
     root.innerHTML = '<div class="card"><div class="card-body"><form class="toolbar" id="client-filters">' +
-      field({ name: 'q', label: 'Search', value: p.q, placeholder: 'Name, client ID, booking ref, phone', attrs: ' type="search"' }).replace('class="field', 'class="field search') +
+      field({ name: 'q', label: 'Search', value: p.q, placeholder: 'Name, Emirates ID, booking ref, phone', attrs: ' type="search"' }).replace('class="field', 'class="field search') +
       (isAdmin() ? field({ name: 'companyId', label: 'Company', type: 'select', options: companies, value: p.companyId, placeholder: 'All companies' }) : '') +
       field({ name: 'medicationName', label: 'Medication', type: 'select', options: meds, value: p.medicationName, placeholder: 'All medications' }) +
       field({ name: 'medicationType', label: 'Injection / pills', type: 'select', options: state.meta.medicationTypes, value: p.medicationType, placeholder: 'All types' }) +
@@ -625,7 +683,7 @@
 
     var html = '<div class="profile-head"><div class="avatar">' + esc(initials(v.fullName)) + '</div><div class="grow">' +
       '<div class="row">' + statusBadge(j) + (j.refillStatus ? badge('Refill: ' + j.refillStatus, REFILL_CLS[j.refillStatus] || 'grey') : '') + '</div>' +
-      '<div class="muted small" style="margin-top:6px">Client ID <b>' + esc(v.externalClientId) + '</b> · ' + esc(v.phone) + (isAdmin() ? ' · ' + esc(v.companyName) : '') + ' · Internal ' + esc(v.clientId) + '</div></div></div>' +
+      '<div class="muted small" style="margin-top:6px">Emirates ID <b>' + esc(v.externalClientId) + '</b> · ' + esc(v.phone) + (isAdmin() ? ' · ' + esc(v.companyName) : '') + ' · Internal ' + esc(v.clientId) + '</div></div></div>' +
       (j.awaitingReview ? '<div class="alert alert-warn">All ' + j.months + ' journey months have been supplied. ' + (isAdmin() ? 'Review the history and confirm completion.' : 'Justlife will review and confirm completion.') + '</div>' : '') +
       (j.statusReason && ['Paused', 'Stopped'].indexOf(j.status) >= 0 ? '<div class="alert alert-info">' + esc(j.status) + ': ' + esc(j.statusReason) + '</div>' : '') +
       '<div class="profile-actions">' + actions + '</div>' +
@@ -671,7 +729,7 @@
         (p.journey && p.journey.Completion_Confirmed === 'TRUE' ? '<div class="alert alert-success">Completion confirmed by ' + esc(p.journey.Completion_Confirmed_By) + ' on ' + fmtDateTime(p.journey.Completion_Confirmed_At) + '. ' + esc(p.journey.Completion_Note) + '</div>' : '') +
         '</div></div>' +
         '<div class="grid-2"><div class="card"><div class="card-head"><h2>Client & registration</h2></div><div class="card-body">' +
-        kv([['Full name', c.Full_Name], ['Phone', c.Phone], ['Client ID', c.External_Client_ID], ['First booking ref', c.First_Booking_Ref], ['Registered', fmtDate(c.Registration_Date), 1],
+        kv([['Full name', c.Full_Name], ['Phone', c.Phone], ['Emirates ID', c.External_Client_ID], ['Justlife booking ref ID', c.First_Booking_Ref], ['Registered', fmtDate(c.Registration_Date), 1],
           ['Registered by', c.Created_By_Name], ['Partner company', v.companyName], ['Refill interval', c.Refill_Interval_Days + ' days']]) +
         '</div></div><div class="card"><div class="card-head"><h2>Initial measurements</h2></div><div class="card-body">' +
         kv([['Height', c.Height_Cm + ' cm'], ['Weight', c.Weight_Kg + ' kg'], ['BMI', c.BMI]]) + '</div></div></div>' +
@@ -738,6 +796,44 @@
     ];
   }
 
+  /* Doctor picker: a dropdown of the company's doctors + "Add new doctor" (no free typing). */
+  function doctorField(o) {
+    return '<label class="field ' + (o.full ? 'full' : '') + '"><span>' + esc(o.label || "Doctor's name") + (o.required ? ' <b class="req">*</b>' : '') + '</span>' +
+      '<div class="row" style="flex-wrap:nowrap"><select name="' + esc(o.name || 'doctorName') + '" data-doctor-select data-current="' + esc(o.value || '') + '"' + (o.required ? ' required' : '') + ' style="flex:1"><option value="">Loading…</option></select>' +
+      '<button type="button" class="btn btn-sm" data-add-doctor title="Add a new doctor to the list">＋ Add new doctor</button></div>' +
+      '<small class="hint">Pick from the list. If the doctor is missing, click “Add new doctor” once and then select them.</small></label>';
+  }
+  function bindDoctorPicker(form, getCompanyId) {
+    var sel = $('[data-doctor-select]', form);
+    if (!sel) return;
+    var load = function (selectName) {
+      var cid = getCompanyId ? getCompanyId() : '';
+      if (isAdmin() && !cid) { sel.innerHTML = '<option value="">Choose the partner company first</option>'; return Promise.resolve(); }
+      return api('doctors.list', { companyId: cid }).then(function (r) {
+        var want = selectName || sel.value || sel.getAttribute('data-current');
+        var names = r.doctors.map(function (d) { return d.name; });
+        if (want && names.map(function (n) { return n.toLowerCase(); }).indexOf(want.toLowerCase()) < 0 && !selectName) names.unshift(want); // legacy value
+        sel.innerHTML = '<option value="">' + (sel.required ? 'Select doctor…' : '— No doctor —') + '</option>' + names.map(function (n) { return '<option value="' + esc(n) + '"' + (want && n.toLowerCase() === want.toLowerCase() ? ' selected' : '') + '>' + esc(n) + '</option>'; }).join('');
+      }).catch(function (e) { sel.innerHTML = '<option value="">Could not load doctors</option>'; toast(e.message, 'error'); });
+    };
+    $('[data-add-doctor]', form).addEventListener('click', function () {
+      var cid = getCompanyId ? getCompanyId() : '';
+      if (isAdmin() && !cid) return toast('Choose the partner company first', 'error');
+      formModal({
+        title: 'Add new doctor', size: 'sm', submitLabel: 'Add doctor', subtitle: 'The doctor is added to your company\'s list so everyone selects the same name.',
+        body: field({ name: 'name', label: "Doctor's full name", required: true, placeholder: 'e.g. Dr. Sara Malik', maxlength: 120 }),
+        onSubmit: function (d, rid) {
+          return api('doctors.add', { name: d.name, companyId: cid }, { requestId: rid }).then(function (r) {
+            toast(r.existed ? r.name + ' is already in the list – selected' : r.name + ' added', 'success');
+            return load(r.name);
+          });
+        }
+      });
+    });
+    if (form.companyId && form.companyId.tagName === 'SELECT') form.companyId.addEventListener('change', function () { load(); });
+    load();
+  }
+
   function registerClientModal() {
     var t = todayStr(), m = state.meta;
     var companies = (m.companies || []).filter(function (c) { return c.status === 'Active'; }).map(function (c) { return { value: c.id, label: c.name }; });
@@ -748,8 +844,8 @@
         section('Client details', [
           { name: 'fullName', label: 'Client full name', required: true, maxlength: 120 },
           { name: 'phone', label: 'Client phone number', required: true, type: 'tel', placeholder: '+971 50 123 4567', maxlength: 30 },
-          { name: 'externalClientId', label: 'Client ID', required: true, maxlength: 60 },
-          { name: 'firstBookingRef', label: 'First booking reference ID', required: true, maxlength: 60 },
+          { name: 'externalClientId', label: 'Client Emirates ID', required: true, maxlength: 60, placeholder: '784-XXXX-XXXXXXX-X' },
+          { name: 'firstBookingRef', label: 'Justlife booking ref ID', required: true, maxlength: 60 },
           { name: 'registrationDate', label: 'Registration date', value: t, readonly: true, hint: 'Set automatically' },
           { name: 'journeyStartDate', label: 'Starting date of GLP journey', type: 'date', required: true, value: t },
           isAdmin() ? { name: 'companyId', label: 'Partner company', type: 'select', required: true, options: companies } : { name: 'companyLabel', label: 'Partner company', value: state.user.companyName, readonly: true, hint: 'Assigned from your login' },
@@ -762,14 +858,13 @@
           { name: 'prescribedDosage', label: 'Prescribed dosage', required: true, placeholder: 'e.g. 5 mg weekly', maxlength: 60 },
           { name: 'startingDosage', label: 'Starting dosage', required: true, placeholder: 'e.g. 2.5 mg', maxlength: 60 },
           { name: 'quantity', label: 'Medicine quantity / amount', required: true, placeholder: 'e.g. 4 pens / 30 tablets', maxlength: 60 },
-          { name: 'doctorName', label: "Doctor's name", maxlength: 120 },
+          { name: '__doctor__' },
           { name: 'prescriptionNotes', label: "Doctor's prescription notes", type: 'textarea', full: true },
           { name: 'partnerNotes', label: 'Registration note (mandatory)', type: 'textarea', required: true, full: true }
         ])) +
         section('Payment details', [
           { name: 'amountCollected', label: 'Amount collected (' + currency() + ')', type: 'number', min: 0, step: '0.01', value: '' },
           { name: 'paymentDate', label: 'Payment collection date', type: 'date', value: t, readonly: !isAdmin(), hint: isAdmin() ? 'Defaults to today' : 'Automatically today' },
-          { name: 'paymentRef', label: 'Payment reference', maxlength: 80 },
           { name: 'paymentStatus', label: 'Payment status', type: 'select', options: m.paymentStatuses, value: 'Paid', hint: 'Only “Paid” counts as collected revenue' }
         ]),
       onMount: function (h, form) {
@@ -778,6 +873,7 @@
           if (hgt > 0 && w > 0) form.bmi.value = (w / Math.pow(hgt / 100, 2)).toFixed(1);
         };
         form.heightCm.addEventListener('input', calc); form.weightKg.addEventListener('input', calc);
+        bindDoctorPicker(form, function () { return isAdmin() ? form.companyId.value : ''; });
       },
       onSubmit: function (d, rid) {
         delete d.registrationDate; delete d.companyLabel;
@@ -802,9 +898,9 @@
       subtitle: esc(v.fullName) + ' · ' + esc(v.externalClientId) + ' · expected ' + fmtDate(j.nextRefillDate),
       body:
         section('Refill', [
-          { name: 'clientLabel', label: 'Client name & ID', value: v.fullName + ' (' + v.externalClientId + ')', readonly: true },
+          { name: 'clientLabel', label: 'Client name & Emirates ID', value: v.fullName + ' (' + v.externalClientId + ')', readonly: true },
           { name: 'refillDate', label: 'Refill date', type: 'date', required: true, value: t, max: t },
-          { name: 'bookingRefLabel', label: 'Booking reference ID', value: c.First_Booking_Ref, readonly: true, hint: 'Same reference as the first booking' },
+          { name: 'bookingRefLabel', label: 'Justlife booking ref ID', value: c.First_Booking_Ref, readonly: true, hint: 'Same reference as the first booking' },
           { name: 'quantity', label: 'Medicine amount / quantity', required: true, maxlength: 60 }
         ]) +
         '<div class="form-section"><h3>Medication</h3>' + field({ name: 'noChange', label: 'No change – same medication and dosage (' + c.Current_Medication_Name + ' · ' + c.Current_Dosage + ')', type: 'checkbox', value: true }) +
@@ -819,7 +915,7 @@
           { name: 'paymentRef', label: 'Payment reference', maxlength: 80 }
         ]) +
         section('Doctor & notes', [
-          { name: 'doctorName', label: "Doctor's name", value: c.Doctor_Name, maxlength: 120 },
+          { name: '__doctor__', opts: { value: c.Doctor_Name } },
           isLast ? { name: 'lastInfo', label: 'Next expected refill date', value: 'Final refill of the journey — no further refill scheduled', readonly: true }
             : { name: 'nextRefillDate', label: 'Next expected refill date', type: 'date', required: true, value: addDays(t, interval), hint: 'Default: refill date + ' + interval + ' days' },
           { name: 'doctorNotes', label: "Doctor's notes", type: 'textarea', full: true },
@@ -832,6 +928,7 @@
           if (on) { form.medicationType.value = c.Current_Medication_Type; form.medicationName.value = c.Current_Medication_Name; form.dosage.value = c.Current_Dosage; }
         };
         form.noChange.addEventListener('change', toggle);
+        bindDoctorPicker(form, function () { return v.companyId; });
         form.refillDate.addEventListener('change', function () { if (form.nextRefillDate && form.refillDate.value) form.nextRefillDate.value = addDays(form.refillDate.value, interval); });
       },
       onSubmit: function (d, rid) {
@@ -891,7 +988,8 @@
   function doctorNoteModal(p) {
     formModal({
       title: 'Add doctor note', size: 'md', submitLabel: 'Save doctor note', subtitle: esc(p.view.fullName),
-      body: field({ name: 'doctorName', label: "Doctor's name", required: true, value: p.client.Doctor_Name, maxlength: 120 }) + field({ name: 'note', label: 'Doctor note', type: 'textarea', required: true }),
+      body: doctorField({ required: true, value: p.client.Doctor_Name }) + field({ name: 'note', label: 'Doctor note', type: 'textarea', required: true }),
+      onMount: function (h, form) { bindDoctorPicker(form, function () { return p.view.companyId; }); },
       onSubmit: function (d) { d.clientId = p.view.clientId; return api('notes.addDoctor', d).then(function () { afterChange('Doctor note saved'); }); }
     });
   }
@@ -933,7 +1031,7 @@
             if (c.state === 'future') return '<td class="num muted">—</td>';
             var alpha = 0.12 + (c.pct || 0) / 100 * 0.7;
             var style = 'background:rgba(249,115,22,' + (c.state === 'partial' ? alpha * 0.6 : alpha).toFixed(2) + ');' + (alpha > 0.55 && c.state === 'final' ? 'color:#fff;' : '');
-            return '<td class="num cohort-cell ' + c.state + '" style="' + style + '" title="' + c.count + ' of ' + row.users + ' clients">' + c.pct + '%' + (c.state === 'partial' ? '<div class="so-far">so far · ' + c.count + '/' + row.users + '</div>' : '') + '</td>';
+            return '<td class="num cohort-cell ' + c.state + '" style="' + style + '" title="' + c.count + ' of ' + row.users + ' clients">' + c.pct + '%' + '<div class="so-far">' + (c.state === 'partial' ? 'so far · ' : '') + c.count + '/' + row.users + '</div></td>';
           }).join('') + '</tr>';
         }).join('') + '</tbody></table></div></div>';
     }).join('') + '</div></div>';
@@ -946,7 +1044,7 @@
       title: 'Edit client information', size: 'lg', submitLabel: 'Save changes', subtitle: 'All changes are recorded in the audit log with before/after values.',
       body: section('Client', [
         { name: 'fullName', label: 'Full name', required: true, value: c.Full_Name }, { name: 'phone', label: 'Phone', required: true, value: c.Phone },
-        { name: 'externalClientId', label: 'Client ID', required: true, value: c.External_Client_ID }, { name: 'firstBookingRef', label: 'First booking ref', required: true, value: c.First_Booking_Ref },
+        { name: 'externalClientId', label: 'Client Emirates ID', required: true, value: c.External_Client_ID }, { name: 'firstBookingRef', label: 'Justlife booking ref ID', required: true, value: c.First_Booking_Ref },
         { name: 'journeyStartDate', label: 'Journey start date', type: 'date', required: true, value: c.Journey_Start_Date, hint: 'Changes the expected end date; use “Reschedule” to correct refill dates' },
         { name: 'refillIntervalDays', label: 'Refill interval (days)', type: 'number', required: true, value: c.Refill_Interval_Days, min: 7, max: 120 }
       ]) + section('Measurements & prescription', [
@@ -1190,7 +1288,7 @@
       '</tbody>' + (rows.length > 1 ? '<tfoot><tr><td>Total</td><td class="num">' + num(tot('newClients')) + '</td><td class="num">' + num(tot('active')) + '</td><td class="num">' + num(tot('completed')) + '</td><td class="num">' + num(tot('stopped')) + '</td><td class="num">' + num(tot('refillsDue')) + '</td><td class="num">' + num(tot('refillsCompleted')) + '</td><td class="num">' + num(tot('overdue')) + '</td><td class="num">' + pct(k.retentionPct) + '</td><td class="num">' + pct(k.conversionPct) + '</td><td class="num">' + money(k.revenue, cur) + '</td></tr></tfoot>' : '') +
       '</table></div></div></div>' +
       '<div class="grid-2">' + chartBox('ch-reg', 'New client registrations by partner') + chartBox('ch-refill', 'Monthly refill performance', 'Due vs completed') + '</div>' +
-      '<div class="grid-2">' + chartBox('ch-rev', 'Partner-wise revenue', 'Paid only') + chartBox('ch-conv', 'Partner-wise conversion', r.definitions.conversion) + '</div>' +
+      '<div class="grid-2">' + chartBox('ch-rev', 'Partner-wise revenue', 'Paid only · new registrations + refills') + chartBox('ch-conv', 'Partner-wise conversion', r.definitions.conversion) + '</div>' +
       '<div class="grid-3">' + chartBox('ch-ret', 'Client retention by partner') + chartBox('ch-over', 'Overdue refills by partner') + chartBox('ch-ups', 'Monthly upsell performance') + '</div>' +
       '<div class="card"><div class="card-head"><h2>Journeys awaiting completion review</h2><span class="count-pill">' + review.length + '</span></div><div class="card-body flush">' + clientsTable(review, { emptyText: 'No journeys awaiting review' }) + '</div></div>' +
       '<div class="card"><div class="card-head"><h2>Metric definitions</h2><a href="#/settings" class="small">Configure</a></div><div class="card-body">' +
@@ -1198,7 +1296,7 @@
     var names = rows.map(function (x) { return x.companyName; });
     makeChart('ch-reg', 'bar', names, [{ label: 'New clients', data: rows.map(function (x) { return x.newClients; }), color: PALETTE[1] }]);
     makeChart('ch-refill', 'bar', r.monthly.map(function (m) { return monthLabel(m.month); }), [{ label: 'Due', data: r.monthly.map(function (m) { return m.due; }), color: PALETTE[2] }, { label: 'Completed', data: r.monthly.map(function (m) { return m.completed; }), color: PALETTE[3] }]);
-    makeChart('ch-rev', 'bar', names, [{ label: 'Revenue', data: rows.map(function (x) { return x.revenue; }), color: PALETTE[0] }, { label: 'Upsell', data: rows.map(function (x) { return x.upsell; }), color: PALETTE[5] }], { money: true });
+    partnerStackChart('ch-rev', rows.filter(function (x) { return x.revenue > 0; }));
     makeChart('ch-conv', 'bar', names, [{ label: 'Conversion %', data: rows.map(function (x) { return x.conversionPct || 0; }), color: PALETTE[1] }], { pct: true });
     makeChart('ch-ret', 'bar', names, [{ label: 'Retention %', data: rows.map(function (x) { return x.retentionPct || 0; }), color: PALETTE[3] }], { pct: true });
     makeChart('ch-over', 'bar', names, [{ label: 'Overdue clients', data: rows.map(function (x) { return x.overdue; }), color: PALETTE[6] }]);
@@ -1242,10 +1340,11 @@
     $('#pay').innerHTML = '<div class="stack"><div class="kpis">' +
       kpi('Total amount collected', money(t.amount, cur), 'purple', 'Paid transactions only') + kpi('Number of transactions', num(t.transactions), 'navy', t.allTransactions - t.transactions ? (t.allTransactions - t.transactions) + ' not paid (excluded)' : '') +
       kpi('Number of clients', num(t.clients)) + kpi('Average collection', money(t.average, cur), 'green') + kpi('Upsell revenue', money(t.upsell, cur), 'purple') + kpi('Pending (not counted)', money(t.pendingAmount, cur), 'orange') + '</div>' +
-      '<div class="grid-2">' + chartBox('ch-pc', 'Partner-wise collection') + chartBox('ch-daily', 'Daily collection trend') + '</div>' +
+      '<div class="grid-2">' + chartBox('ch-pc', 'Partner-wise collection', 'Paid only · new registrations + refills') + chartBox('ch-daily', 'Daily collection trend') + '</div>' +
       '<div class="grid-2">' + chartBox('ch-weekly', 'Weekly collection trend', 'Week starting Monday') + chartBox('ch-monthly', 'Monthly collection trend') + '</div>' +
       '<div class="grid-2"><div class="card"><div class="card-head"><h2>By company</h2></div><div class="card-body flush">' + simpleTable(['Company', 'Transactions', 'Collected', 'Upsell'], r.byCompany.map(function (x) { return [esc(x.companyName), num(x.count), money(x.amount, cur), money(x.upsell, cur)]; })) + '</div></div>' +
-      '<div class="card"><div class="card-head"><h2>By partner user</h2></div><div class="card-body flush">' + simpleTable(['Partner user', 'Company', 'Transactions', 'Collected'], r.byUser.map(function (x) { return [esc(x.name), esc(x.companyName), num(x.count), money(x.amount, cur)]; })) + '</div></div></div>' +
+      '<div class="card"><div class="card-head"><h2>By doctor</h2><span class="muted small">Clients registered in this period</span></div><div class="card-body flush">' +
+        simpleTable(['Doctor', 'Company', 'Total clients', 'Took refill', 'Refill rate', 'Collected'], r.byDoctor.map(function (x) { return [esc(x.doctor), esc(x.companyName), num(x.clients), num(x.refilled), x.refillRate + '%', money(x.amount, cur)]; })) + '</div></div></div>' +
       '<div class="card"><div class="card-head"><h2>Payment transactions</h2><span class="muted small">' + r.transactions.length + ' records · ' + (r.from ? fmtDate(r.from) + ' → ' + fmtDate(r.to) : 'All time') + '</span></div><div class="card-body flush">' +
       (r.transactions.length ? '<div class="table-wrap"><table class="table"><thead><tr><th>Transaction</th><th>Client</th><th>Company</th><th>Source ref</th><th>Type</th><th>Medication</th><th class="num">Amount</th><th>Payment date</th><th>Status</th><th>Created by</th><th></th></tr></thead><tbody>' +
         r.transactions.map(function (x) {
@@ -1254,7 +1353,7 @@
             '<td class="num strong">' + money(x.Amount, x.Currency) + '</td><td class="nowrap">' + fmtDate(x.Payment_Date) + '</td><td>' + badge(x.Payment_Status) + '</td><td>' + esc(x.Created_By_Name) + '<div class="cell-sub">' + fmtDateTime(x.Created_At) + '</div></td>' +
             '<td><button class="btn btn-sm" data-fix-tx="' + esc(x.Transaction_ID) + '">Correct</button></td></tr>';
         }).join('') + '</tbody></table></div>' : emptyState('No payments in this period', '💳')) + '</div></div></div>';
-    makeChart('ch-pc', 'bar', r.byCompany.map(function (x) { return x.companyName; }), [{ label: 'Collected', data: r.byCompany.map(function (x) { return x.amount; }), color: PALETTE[0] }, { label: 'Upsell', data: r.byCompany.map(function (x) { return x.upsell; }), color: PALETTE[5] }], { money: true });
+    partnerStackChart('ch-pc', r.byCompany);
     makeChart('ch-daily', 'line', r.daily.map(function (x) { return fmtDate(x.key).slice(0, 6); }), [{ label: 'Collected', data: r.daily.map(function (x) { return x.amount; }), color: PALETTE[1] }], { money: true });
     makeChart('ch-weekly', 'bar', r.weekly.map(function (x) { return fmtDate(x.key).slice(0, 6); }), [{ label: 'Collected', data: r.weekly.map(function (x) { return x.amount; }), color: PALETTE[1] }], { money: true });
     makeChart('ch-monthly', 'bar', r.monthly.map(function (x) { return monthLabel(x.key); }), [{ label: 'Collected', data: r.monthly.map(function (x) { return x.amount; }), color: PALETTE[0] }], { money: true });
@@ -1268,7 +1367,7 @@
   function simpleTable(head, rows) {
     if (!rows.length) return emptyState('No data');
     return '<div class="table-wrap"><table class="table"><thead><tr>' + head.map(function (h, i) { return '<th' + (i > 0 ? ' class="num"' : '') + '>' + esc(h) + '</th>'; }).join('') + '</tr></thead><tbody>' +
-      rows.map(function (r) { return '<tr>' + r.map(function (c, i) { return '<td' + (i > 0 && typeof c === 'string' && /^[A-Z]{3} |^[\d,]+$/.test(c) ? ' class="num"' : '') + '>' + c + '</td>'; }).join('') + '</tr>'; }).join('') + '</tbody></table></div>';
+      rows.map(function (r) { return '<tr>' + r.map(function (c, i) { return '<td' + (i > 0 && typeof c === 'string' && /^[A-Z]{3} |^[\d,.]+%?$/.test(c) ? ' class="num"' : '') + '>' + c + '</td>'; }).join('') + '</tr>'; }).join('') + '</tbody></table></div>';
   }
 
   /* ---------- Upsell creation worklist ---------- */
@@ -1293,7 +1392,7 @@
     var type = function () { return tab === 'refills' ? 'refill' : 'registration'; };
     var exportRowsFor = function (rows) {
       return rows.map(function (x) {
-        var o = { 'Ref ID': x.bookingRef, 'Client name': x.name, 'Client ID': x.externalClientId, 'Phone': x.phone, 'Company': x.companyName };
+        var o = { 'Justlife booking ref ID': x.bookingRef, 'Client name': x.name, 'Emirates ID': x.externalClientId, 'Phone': x.phone, 'Company': x.companyName };
         if (x.type === 'registration') { o['Start date'] = x.startDate; o['Registration date'] = x.registrationDate; }
         else { o['Refill #'] = x.cycle; o['Refill date'] = x.refillDate; }
         o['Medication'] = x.medication; o['Amount (' + data.currency + ')'] = x.amount; o['Payment status'] = x.paymentStatus; o['Upsell status'] = x.upsellStatus;
