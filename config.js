@@ -6,7 +6,7 @@
  * ========================================================================== */
 window.APP_CONFIG = {
   // Apps Script → Deploy → Manage deployments → Web app URL (ends with /exec)
-  API_URL: 'https://script.google.com/macros/s/AKfycbyCzjt0aa6_-OryL0xNY1awZJhGfM8JOooKEvxZjx1cSIHoI7V11vlchEo41H5CQ0E/exec',
+  API_URL: 'https://script.google.com/macros/s/AKfycbwL5if0xYZLo5tv_nVY1uOYMp7gdaoKkBigIC6KI21gl3GpGjL0X52qRT4MSpCBSKY/exec',
 
   // Google Cloud Console → APIs & Services → Credentials → OAuth 2.0 Client ID (Web)
         GOOGLE_CLIENT_ID: '676386166698-m6lkakhva28q1f5h4nqdqrad0cg75cmj.apps.googleusercontent.com',
