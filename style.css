@@ -337,3 +337,11 @@ dl { margin: 0; }
 .calltl .st-overdue .dot { background: var(--red) !important; }
 .calltl .st-upcoming .dot, .calltl .st-due-today .dot { background: #FDBA74 !important; }
 .calltl li { padding-bottom: 16px; }
+
+/* ---------- leads, business dashboard ---------- */
+.b-lead { background: #F1F5F9; color: #475569; border-color: #CBD5E1; }
+.form-section.decision { border-color: var(--blue-100); background: var(--blue-50); }
+.section-title { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-top: 6px; }
+.section-title h2 { font-size: 16px; }
+.delta { font-weight: 800; }
+.delta.up { color: var(--green); } .delta.down { color: var(--red); } .delta.flat { color: var(--muted); }

@@ -258,6 +258,7 @@
   }
   var SEG_LABEL = { done: 'Completed', current: 'Current month (supplied)', supplied: 'Supplied in advance', next: 'Next refill', due: 'Refill due', missed: 'Overdue – not supplied', stopped: 'Stopped', paused: 'Paused', future: 'Upcoming' };
   function journeyBar(j, large) {
+    if (j.status === 'Lead') return '<span class="badge b-lead">Lead · journey not started</span>';
     var segs = j.segments.map(function (s, i) { return '<span class="seg seg-' + esc(s) + '" title="Month ' + (i + 1) + ': ' + esc(SEG_LABEL[s] || s) + '"></span>'; }).join('');
     var meta = j.status === 'Not Started' ? 'Starts ' + fmtDate(j.startDate) : 'Month <strong>' + j.currentMonth + '</strong>/' + j.months;
     var html = '<div class="journey ' + (large ? 'journey-lg' : '') + '" role="img" aria-label="Journey ' + j.percent + '% complete, ' + esc(j.status) + '">' +
@@ -292,7 +293,7 @@
       var c = d.color || PALETTE[i % PALETTE.length];
       d.backgroundColor = d.backgroundColor || (type === 'line' ? c + '22' : c);
       d.borderColor = c; d.borderWidth = type === 'line' ? 2.5 : 0; d.borderRadius = type === 'bar' ? 6 : 0;
-      if (type === 'line') { d.tension = .3; d.fill = d.fill !== undefined ? d.fill : true; d.pointRadius = labels.length > 40 ? 0 : 3; }
+      if (type === 'line') { d.tension = .3; d.cubicInterpolationMode = 'monotone'; d.fill = d.fill !== undefined ? d.fill : true; d.pointRadius = labels.length > 40 ? 0 : 3; d.spanGaps = true; }
       d.maxBarThickness = 42;
     });
     var c = new Chart(el, {
@@ -306,62 +307,71 @@
     });
     state.charts.push(c);
   }
-  /* One stacked bar per partner: New registrations + Refills, labelled inside with AED, count and %. */
-  var stackLabels = {
-    id: 'stackLabels',
+  /* "Candle" bars: stacked segments labelled inside with value, count and %, total on top.
+     series: [{label, data, color, counts?, unit, pctOf?}]  o: {money, share, totalFmt, legend} */
+  var candleLabels = {
+    id: 'candleLabels',
     afterDatasetsDraw: function (chart) {
-      var ctx = chart.ctx, info = chart.options.plugins.stackLabels;
-      if (!info) return;
+      var info = chart.canvas._candleInfo; if (!info) return; // kept off chart options (Chart.js would call functions as scriptable options)
+      var ctx = chart.ctx, F = '"Plus Jakarta Sans", sans-serif';
       ctx.save(); ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
       chart.data.labels.forEach(function (lbl, i) {
-        var total = 0, top = null;
+        var total = 0, top = null, x = null;
         chart.data.datasets.forEach(function (ds, di) {
           var meta = chart.getDatasetMeta(di); if (meta.hidden) return;
-          var bar = meta.data[i], v = ds.data[i] || 0; total += v;
+          var bar = meta.data[i], v = Number(ds.data[i] || 0); total += v;
           if (!bar || !v) return;
-          var h = Math.abs(bar.base - bar.y), pct = info.totals[i] ? Math.round(v / info.totals[i] * 100) : 0;
-          top = top === null ? bar.y : Math.min(top, bar.y);
+          x = bar.x; top = top === null ? bar.y : Math.min(top, bar.y);
+          var h = Math.abs(bar.base - bar.y), w = bar.width || 40;
+          var denom = ds.pctOf || (info.share ? info.seriesTotals[di] : info.totals[i]);
+          var pct = denom ? Math.round(v / denom * 100) : 0;
+          var l1 = info.money ? money(v) : num(v) + (ds.counts ? '' : ' ' + (ds.unit || ''));
+          var l2 = ds.counts ? num(ds.counts[i]) + ' ' + (ds.unit || '') : '';
           ctx.fillStyle = '#fff';
-          if (h >= 46) {
-            ctx.font = '700 12px "Plus Jakarta Sans", sans-serif'; ctx.fillText(money(v), bar.x, bar.y + h / 2 - 15);
-            ctx.font = '500 11px "Plus Jakarta Sans", sans-serif'; ctx.fillText(ds.counts[i] + ' ' + ds.unit, bar.x, bar.y + h / 2);
-            ctx.font = '800 12px "Plus Jakarta Sans", sans-serif'; ctx.fillText(pct + '%', bar.x, bar.y + h / 2 + 15);
-          } else if (h >= 16) { ctx.font = '700 11px "Plus Jakarta Sans", sans-serif'; ctx.fillText(pct + '% · ' + ds.counts[i], bar.x, bar.y + h / 2); }
+          var lines = [l1, l2, pct + '%'].filter(String);
+          if (h >= 16 * lines.length + 6 && w >= 34) {
+            var y0 = bar.y + h / 2 - (lines.length - 1) * 7.5;
+            lines.forEach(function (t, li) { ctx.font = (li === lines.length - 1 ? '800 ' : (li === 0 ? '700 ' : '500 ')) + '11.5px ' + F; ctx.fillText(t, bar.x, y0 + li * 15); });
+          } else if (h >= 14) { ctx.font = '700 10.5px ' + F; ctx.fillText(pct + '%', bar.x, bar.y + h / 2); }
         });
-        if (top !== null) {
-          var meta0 = chart.getDatasetMeta(0), x = meta0.data[i].x;
-          ctx.fillStyle = '#0B2545'; ctx.font = '800 12.5px "Plus Jakarta Sans", sans-serif';
-          ctx.fillText('Total ' + money(total), x, top - 20);
-          ctx.font = '500 11px "Plus Jakarta Sans", sans-serif'; ctx.fillStyle = '#64748B';
-          ctx.fillText((info.clients[i] || 0) + ' new · ' + (info.refills[i] || 0) + ' refills', x, top - 7);
+        if (top !== null && chart.data.datasets.length > 1) {
+          ctx.fillStyle = '#0B2545'; ctx.font = '800 12px ' + F;
+          ctx.fillText(info.totalFmt ? info.totalFmt(total, i) : (info.money ? 'Total ' + money(total) : num(total)), x, top - 10);
         }
       });
       ctx.restore();
     }
   };
-  function partnerStackChart(id, rows) {
+  function stackChart(id, labels, series, o) {
+    o = o || {};
     var el = document.getElementById(id);
     if (!el) return;
     if (!window.Chart) { el.parentNode.innerHTML = '<div class="chart-fallback">Charts unavailable</div>'; return; }
-    if (!rows.length) { el.parentNode.innerHTML = '<div class="chart-fallback">No data for the selected filters</div>'; return; }
-    var totals = rows.map(function (x) { return (x.regAmount || 0) + (x.refillAmount || 0); });
+    if (!labels.length || !series.some(function (s2) { return s2.data.some(function (v) { return v > 0; }); })) { el.parentNode.innerHTML = '<div class="chart-fallback">No data for the selected filters</div>'; return; }
+    var totals = labels.map(function (l, i) { return series.reduce(function (s2, d) { return s2 + Number(d.data[i] || 0); }, 0); });
+    var seriesTotals = series.map(function (d) { return d.data.reduce(function (s2, v) { return s2 + Number(v || 0); }, 0); });
+    el._candleInfo = { money: o.money, share: o.share, totals: totals, seriesTotals: seriesTotals, totalFmt: o.totalFmt };
     var c = new Chart(el, {
       type: 'bar',
-      data: { labels: rows.map(function (x) { return x.companyName; }), datasets: [
-        { label: 'New registrations', data: rows.map(function (x) { return x.regAmount || 0; }), counts: rows.map(function (x) { return x.regCount || 0; }), unit: 'new clients', backgroundColor: '#0B2545', borderRadius: 6, maxBarThickness: 110 },
-        { label: 'Refills', data: rows.map(function (x) { return x.refillAmount || 0; }), counts: rows.map(function (x) { return x.refillCount || 0; }), unit: 'refills', backgroundColor: '#2563EB', borderRadius: 6, maxBarThickness: 110 }] },
+      data: { labels: labels, datasets: series.map(function (d) { return { label: d.label, data: d.data, counts: d.counts, unit: d.unit, pctOf: d.pctOf, backgroundColor: d.color, borderRadius: 6, maxBarThickness: 110 }; }) },
       options: {
-        responsive: true, maintainAspectRatio: false, layout: { padding: { top: 34 } },
+        responsive: true, maintainAspectRatio: false, layout: { padding: { top: series.length > 1 ? 22 : 6 } },
         plugins: {
-          legend: { position: 'bottom', labels: { boxWidth: 12, usePointStyle: true } },
-          stackLabels: { totals: totals, clients: rows.map(function (x) { return x.regCount || 0; }), refills: rows.map(function (x) { return x.refillCount || 0; }) },
-          tooltip: { callbacks: { label: function (ctx) { var ds = ctx.dataset, i = ctx.dataIndex, v = ds.data[i]; return ' ' + ds.label + ': ' + money(v) + ' · ' + ds.counts[i] + ' ' + ds.unit + ' · ' + (totals[i] ? Math.round(v / totals[i] * 100) : 0) + '%'; } } }
+          legend: { display: o.legend !== false && series.length > 1, position: 'bottom', labels: { boxWidth: 12, usePointStyle: true } },
+
+          tooltip: { callbacks: { label: function (ctx) { var ds = ctx.dataset, i = ctx.dataIndex, v = ds.data[i], den = ds.pctOf || (o.share ? seriesTotals[ctx.datasetIndex] : totals[i]); return ' ' + ds.label + ': ' + (o.money ? money(v) : num(v)) + (ds.counts ? ' · ' + ds.counts[i] + ' ' + ds.unit : '') + ' · ' + (den ? Math.round(v / den * 100) : 0) + '%'; } } }
         },
-        scales: { x: { stacked: true, grid: { display: false } }, y: { stacked: true, beginAtZero: true, grid: { color: '#EEF2F7' }, ticks: { callback: function (v) { return v >= 1000 ? (v / 1000) + 'k' : v; } } } }
+        scales: { x: { stacked: true, grid: { display: false }, ticks: { autoSkip: false, maxRotation: 30 } }, y: { stacked: true, beginAtZero: true, grid: { color: '#EEF2F7' }, ticks: { precision: 0, callback: function (v) { return o.money && v >= 1000 ? (v / 1000) + 'k' : v; } } } }
       },
-      plugins: [stackLabels]
+      plugins: [candleLabels]
     });
     state.charts.push(c);
+  }
+  function partnerStackChart(id, rows) {
+    stackChart(id, rows.map(function (x) { return x.companyName; }), [
+      { label: 'New registrations', data: rows.map(function (x) { return x.regAmount || x.regRevenue || 0; }), counts: rows.map(function (x) { return x.regCount || 0; }), unit: 'new clients', color: '#0B2545' },
+      { label: 'Refills', data: rows.map(function (x) { return x.refillAmount || x.refillRevenue || 0; }), counts: rows.map(function (x) { return x.refillCount || 0; }), unit: 'refills', color: '#2563EB' }
+    ], { money: true, totalFmt: function (v, i) { return 'Total ' + money(v); } });
   }
 
   function monthLabel(k) { var p = k.split('-'); return MONTHS[+p[1] - 1] + ' ' + p[0].slice(2); }
@@ -610,6 +620,7 @@
     'go': function (el) { var p = {}; var raw = el.getAttribute('data-params'); if (raw) { try { p = JSON.parse(raw); } catch (e) {} } go(el.getAttribute('data-view'), p); },
     'export': function (el) { exportModal(el.getAttribute('data-dataset')); },
     'change-password': function () { changePasswordModal(false); },
+    'start-journey': function (el) { withClient(el.getAttribute('data-id'), startJourneyModal); },
     'wa': function (el) { window.open(el.getAttribute('href'), '_blank', 'noopener'); },
     'call-journey': function (el) { openCallJourney(el.getAttribute('data-id')); },
     'log-call': function (el) { logCallModal(el.getAttribute('data-id'), el.getAttribute('data-key')); }
@@ -627,7 +638,7 @@
   /* ===========================================================================
    * 7. CLIENT LIST (shared Admin + Partner)
    * ========================================================================= */
-  var STATUS_OPTIONS = ['Not Started', 'Active', 'Paused', 'Overdue', 'Stopped', 'Completed'];
+  var STATUS_OPTIONS = ['Lead', 'Not Started', 'Active', 'Paused', 'Overdue', 'Stopped', 'Completed'];
   var REFILL_STATUS_OPTIONS = ['Overdue', 'Due Today', 'Upcoming', 'All Refills Done', 'Paused', 'Stopped', 'Completed'];
 
   function clientsTable(rows, opt) {
@@ -644,7 +655,7 @@
         '<td>' + statusBadge(c.journey) + '</td>' +
         '<td>' + refillChip(c.journey) + '</td>' +
         '<td class="nowrap">' + fmtDate(c.registrationDate) + '</td>' +
-        (opt.actions ? '<td class="nowrap">' + (c.journey.nextScheduleId && ['Active', 'Overdue', 'Not Started'].indexOf(c.journey.status) >= 0 ? '<button class="btn btn-sm btn-success" data-action="record-refill" data-id="' + esc(c.clientId) + '">+ Refill</button>' : '') + '</td>' : '') +
+        (opt.actions ? '<td class="nowrap">' + (c.journey.status === 'Lead' ? '<button class="btn btn-sm btn-primary" data-action="start-journey" data-id="' + esc(c.clientId) + '">▶ Start journey</button>' : '') + (c.journey.nextScheduleId && ['Active', 'Overdue', 'Not Started'].indexOf(c.journey.status) >= 0 ? '<button class="btn btn-sm btn-success" data-action="record-refill" data-id="' + esc(c.clientId) + '">+ Refill</button>' : '') + '</td>' : '') +
         '</tr>';
     });
     return h + '</tbody></table></div>';
@@ -703,6 +714,7 @@
   function renderProfile(p) {
     var ap = activeProfile, v = p.view, j = v.journey, c = p.client, m = ap.modal;
     $('.modal-head h2', m.el).textContent = v.fullName;
+    var lead = v.clientStatus === 'Lead';
     var canRefill = j.nextScheduleId && ['Active', 'Overdue', 'Not Started'].indexOf(j.status) >= 0;
     var canResched = j.nextScheduleId && ['Stopped', 'Completed'].indexOf(j.status) < 0;
     var actions = (canRefill ? '<button class="btn btn-success" data-p="refill">＋ Record refill</button>' : '') +
@@ -712,7 +724,9 @@
       '<button class="btn" data-p="note">📝 ' + (isStaff() ? 'Add note / instruction' : 'Add note') + '</button><button class="btn" data-p="doctor">🩺 Doctor note</button>' +
       (j.nextScheduleId ? waButton(v.phone, v.fullName, 'refill', 'btn-lg') : '') +
       (isStaff() ? '<button class="btn" data-p="calls">📞 Call journey</button>' : '');
-    if (isAdmin()) {
+    if (lead) actions = '<button class="btn btn-primary" data-p="start">▶ Start journey</button><button class="btn" data-p="note">📝 Add note</button>';
+    if (isAdmin() && lead) actions += '<button class="btn" data-p="edit">✏️ Edit client</button>';
+    if (isAdmin() && !lead) {
       actions += '<button class="btn" data-p="edit">✏️ Edit client</button>';
       if (j.storedStatus === 'Active') actions += '<button class="btn" data-p="pause">⏸ Pause</button><button class="btn btn-danger" data-p="stop">⏹ Stop</button>';
       if (j.storedStatus === 'Paused' || j.storedStatus === 'Stopped') actions += '<button class="btn btn-blue" data-p="reactivate">▶ Reactivate</button>' + (j.storedStatus === 'Paused' ? '<button class="btn btn-danger" data-p="stop">⏹ Stop</button>' : '');
@@ -728,6 +742,7 @@
       '<div class="muted small" style="margin-top:6px">Emirates ID <b>' + esc(v.externalClientId) + '</b> · ' + esc(v.phone) + (isStaff() ? ' · ' + esc(v.companyName) : '') + ' · Internal ' + esc(v.clientId) +
       (isStaff() ? ' · Agent <b>' + esc(p.assignedAgent ? p.assignedAgent.name : 'Unassigned') + '</b>' : '') + '</div></div></div>' +
       (instr.length ? '<div class="alert alert-info"><b>📌 Instructions from Justlife</b>' + instr.map(function (n) { return '<div style="margin-top:4px">' + esc(n.Note) + ' <span class="muted small">— ' + esc(n.Created_By_Name) + ', ' + fmtDateTime(n.Created_At) + '</span></div>'; }).join('') + '</div>' : '') +
+      (lead ? '<div class="alert alert-warn"><b>Lead – not converted.</b> Reason: ' + esc(v.leadReason || '—') + '. No journey, refills, payment or agent yet. When the client comes back and pays, click <b>▶ Start journey</b>.</div>' : '') +
       (j.awaitingReview ? '<div class="alert alert-warn">All ' + j.months + ' journey months have been supplied. ' + (isAdmin() ? 'Review the history and confirm completion.' : 'Justlife will review and confirm completion.') + '</div>' : '') +
       (j.statusReason && ['Paused', 'Stopped'].indexOf(j.status) >= 0 ? '<div class="alert alert-info">' + esc(j.status) + ': ' + esc(j.statusReason) + '</div>' : '') +
       '<div class="profile-actions">' + actions + '</div>' +
@@ -746,7 +761,7 @@
       refill: function () { refillModal(p); }, reschedule: function () { rescheduleModal(p); }, medication: function () { medicationModal(p); },
       note: function () { noteModal(p); }, doctor: function () { doctorNoteModal(p); }, edit: function () { editClientModal(p); },
       pause: function () { journeyStatusModal(p, 'Paused'); }, stop: function () { journeyStatusModal(p, 'Stopped'); }, reactivate: function () { journeyStatusModal(p, 'Active'); },
-      complete: function () { completionModal(p); }, extend: function () { extendModal(p); }, calls: function () { openCallJourney(p.view.clientId); }
+      complete: function () { completionModal(p); }, extend: function () { extendModal(p); }, calls: function () { openCallJourney(p.view.clientId); }, start: function () { startJourneyModal(p); }
     };
     $$('[data-p]', m.el).forEach(function (b) { b.addEventListener('click', handlers[b.getAttribute('data-p')]); });
     bindProfileTab(p);
@@ -763,6 +778,11 @@
 
   function profileTab(tab, p) {
     var v = p.view, j = v.journey, c = p.client;
+    if (tab === 'overview' && v.clientStatus === 'Lead') {
+      return '<div class="grid-2"><div class="card"><div class="card-head"><h2>Client & registration</h2></div><div class="card-body">' +
+        kv([['Full name', c.Full_Name], ['Phone', c.Phone], ['Emirates ID', c.External_Client_ID], ['Justlife booking ref ID', c.First_Booking_Ref], ['Registered', fmtDate(c.Registration_Date), 1], ['Registered by', c.Created_By_Name], ['Partner company', v.companyName], ['Status', badge('Lead', 'lead'), 1], ['Reason', v.leadReason]]) +
+        '</div></div><div class="card"><div class="card-head"><h2>Measurements</h2></div><div class="card-body">' + kv([['Height', c.Height_Cm ? c.Height_Cm + ' cm' : '—'], ['Weight', c.Weight_Kg ? c.Weight_Kg + ' kg' : '—'], ['BMI', c.BMI || '—']]) + '</div></div></div>';
+    }
     if (tab === 'overview') {
       return '<div class="card"><div class="card-head"><h2>' + (j.months === 6 ? 'Six' : j.months) + '-month journey</h2><span class="muted small">' + fmtDate(j.startDate) + ' → ' + fmtDate(j.endDate) + '</span></div><div class="card-body stack">' +
         journeyBar(j, true) +
@@ -885,56 +905,99 @@
     load();
   }
 
+  /* Journey sections shared by "Register (converted)" and "Start journey" for a lead. */
+  function journeySectionsHtml(t, m) {
+    return section('Journey start', [
+        { name: 'journeyStartDate', label: 'Journey starting date', type: 'date', required: true, value: t, hint: 'The day the client started the medication – the 6-month journey and refills count from here' },
+        { name: 'refillIntervalDays', label: 'Refill interval (days)', type: 'number', value: m.defaultRefillIntervalDays, min: 7, max: 120, hint: 'Individual schedule for this client' }
+      ]) +
+      section('Medication details', medFields('', {}).concat([
+        { name: 'prescribedDosage', label: 'Prescribed dosage', required: true, placeholder: 'e.g. 5 mg weekly', maxlength: 60 },
+        { name: 'startingDosage', label: 'Starting dosage', required: true, placeholder: 'e.g. 2.5 mg', maxlength: 60 },
+        { name: 'quantity', label: 'Medicine quantity / amount', required: true, placeholder: 'e.g. 4 pens / 30 tablets', maxlength: 60 },
+        { name: '__doctor__' },
+        { name: 'prescriptionNotes', label: "Doctor's prescription notes", type: 'textarea', full: true }
+      ])) +
+      section('Payment details', [
+        { name: 'amountCollected', label: 'Amount collected (' + currency() + ')', type: 'number', min: 0.01, step: '0.01', value: '', required: true, hint: 'A journey only starts when payment is collected' },
+        { name: 'paymentDate', label: 'Payment collection date', type: 'date', value: t, readonly: !isAdmin(), hint: isAdmin() ? 'Defaults to today' : 'Automatically today' },
+        { name: 'paymentStatus', label: 'Payment status', type: 'select', required: true, options: m.paymentStatuses, value: 'Paid', hint: 'Only “Paid” counts as collected revenue' }
+      ]);
+  }
+
   function registerClientModal() {
     var t = todayStr(), m = state.meta;
     var companies = (m.companies || []).filter(function (c) { return c.status === 'Active'; }).map(function (c) { return { value: c.id, label: c.name }; });
     formModal({
       title: 'Register new GLP-1 client', size: 'lg', submitLabel: 'Register client',
-      subtitle: 'A six-month journey and the first refill date are created automatically.',
+      subtitle: 'If the client took the medication and paid, a journey starts and an agent is assigned. Otherwise the client is saved as a lead.',
       body:
+        '<div class="form-section decision"><h3>Treatment decision</h3>' +
+        field({ name: 'converted', label: 'Was the medication given and payment collected today?', type: 'select', required: true, full: true,
+          options: [{ value: 'Yes', label: 'Yes – medication given & payment collected → start the journey' }, { value: 'No', label: 'No – not eligible / did not agree / will decide later → save as lead' }] }) + '</div>' +
         section('Client details', [
           { name: 'fullName', label: 'Client full name', required: true, maxlength: 120 },
           { name: 'phone', label: 'Client phone number', required: true, type: 'tel', placeholder: '+971 50 123 4567', maxlength: 30 },
           { name: 'externalClientId', label: 'Client Emirates ID', required: true, maxlength: 60, placeholder: '784-XXXX-XXXXXXX-X' },
           { name: 'firstBookingRef', label: 'Justlife booking ref ID', required: true, maxlength: 60 },
           { name: 'registrationDate', label: 'Registration date', value: t, readonly: true, hint: 'Set automatically' },
-          { name: 'journeyStartDate', label: 'Starting date of GLP journey', type: 'date', required: true, value: t },
           isAdmin() ? { name: 'companyId', label: 'Partner company', type: 'select', required: true, options: companies } : { name: 'companyLabel', label: 'Partner company', value: state.user.companyName, readonly: true, hint: 'Assigned from your login' },
-          { name: 'refillIntervalDays', label: 'Refill interval (days)', type: 'number', value: m.defaultRefillIntervalDays, min: 7, max: 120, hint: 'Individual schedule for this client' },
           { name: 'heightCm', label: 'Height (cm)', type: 'number', required: true, min: 50, max: 250, step: '0.1' },
           { name: 'weightKg', label: 'Weight (kg)', type: 'number', required: true, min: 20, max: 400, step: '0.1' },
           { name: 'bmi', label: 'BMI', type: 'number', min: 10, max: 100, step: '0.1', hint: 'Calculated from height & weight — you can adjust' }
         ]) +
-        section('Medication details', medFields('', {}).concat([
-          { name: 'prescribedDosage', label: 'Prescribed dosage', required: true, placeholder: 'e.g. 5 mg weekly', maxlength: 60 },
-          { name: 'startingDosage', label: 'Starting dosage', required: true, placeholder: 'e.g. 2.5 mg', maxlength: 60 },
-          { name: 'quantity', label: 'Medicine quantity / amount', required: true, placeholder: 'e.g. 4 pens / 30 tablets', maxlength: 60 },
-          { name: '__doctor__' },
-          { name: 'prescriptionNotes', label: "Doctor's prescription notes", type: 'textarea', full: true },
-          { name: 'partnerNotes', label: 'Registration note (mandatory)', type: 'textarea', required: true, full: true }
-        ])) +
-        section('Payment details', [
-          { name: 'amountCollected', label: 'Amount collected (' + currency() + ')', type: 'number', min: 0, step: '0.01', value: '' },
-          { name: 'paymentDate', label: 'Payment collection date', type: 'date', value: t, readonly: !isAdmin(), hint: isAdmin() ? 'Defaults to today' : 'Automatically today' },
-          { name: 'paymentStatus', label: 'Payment status', type: 'select', options: m.paymentStatuses, value: 'Paid', hint: 'Only “Paid” counts as collected revenue' }
-        ]),
+        '<div data-when="No" hidden>' + section('Why not converted?', [
+          { name: 'leadReason', label: 'Reason', type: 'select', required: true, options: m.leadReasons || [], full: true }
+        ]) + '<div class="alert alert-info">No journey, refill schedule, payment or agent is created for a lead. When the client comes back, open them and click <b>▶ Start journey</b>.</div></div>' +
+        '<div data-when="Yes" hidden>' + journeySectionsHtml(t, m) + '</div>' +
+        section('Note', [{ name: 'partnerNotes', label: 'Registration note (mandatory)', type: 'textarea', required: true, full: true }]),
       onMount: function (h, form) {
         var calc = function () {
           var hgt = parseFloat(form.heightCm.value), w = parseFloat(form.weightKg.value);
           if (hgt > 0 && w > 0) form.bmi.value = (w / Math.pow(hgt / 100, 2)).toFixed(1);
         };
         form.heightCm.addEventListener('input', calc); form.weightKg.addEventListener('input', calc);
+        var toggle = function () {
+          var v = form.converted.value;
+          $$('[data-when]', form).forEach(function (box) {
+            var on = box.getAttribute('data-when') === v;
+            box.hidden = !on;
+            $$('input,select,textarea', box).forEach(function (el) { el.disabled = !on; });
+          });
+          // height/weight are optional for leads
+          form.heightCm.required = form.weightKg.required = v !== 'No';
+          $$('.field', form).forEach(function (f) { var inp = f.querySelector('#' + (f.getAttribute('for') || 'x')); if (inp && (inp.name === 'heightCm' || inp.name === 'weightKg')) { var r = f.querySelector('.req'); if (r) r.hidden = v === 'No'; } });
+          $('[data-submit]', h.el).textContent = v === 'No' ? 'Save as lead' : (v === 'Yes' ? 'Register & start journey' : 'Register client');
+        };
+        form.converted.addEventListener('change', toggle); toggle();
         bindDoctorPicker(form, function () { return isAdmin() ? form.companyId.value : ''; });
       },
       onSubmit: function (d, rid) {
         delete d.registrationDate; delete d.companyLabel;
         if (!isAdmin()) delete d.paymentDate;
-        if (Number(d.amountCollected) > 0 && !d.paymentStatus) throw new Error('Choose a payment status for the amount collected');
+        if (d.converted === 'No') ['journeyStartDate', 'refillIntervalDays', 'medicationType', 'medicationName', 'prescribedDosage', 'startingDosage', 'quantity', 'doctorName', 'prescriptionNotes', 'amountCollected', 'paymentDate', 'paymentStatus'].forEach(function (k) { delete d[k]; });
+        else delete d.leadReason;
         return api('client.register', d, { requestId: rid }).then(function (r) {
-          toast(r.duplicate ? 'This registration was already saved' : 'Client registered successfully', 'success');
+          toast(r.duplicate ? 'This registration was already saved' : (r.lead ? 'Saved as lead – start the journey when the client comes back' : 'Client registered – journey started' + (r.assignedAgent ? ' · agent ' + r.assignedAgent : '')), 'success');
           refreshAll();
           setTimeout(function () { openClientProfile(r.clientId); }, 200);
         });
+      }
+    });
+  }
+
+  function startJourneyModal(p) {
+    var t = todayStr(), m = state.meta;
+    formModal({
+      title: 'Start journey', size: 'lg', submitLabel: 'Start journey',
+      subtitle: esc(p.view.fullName) + ' · lead since ' + fmtDate(p.client.Registration_Date) + (p.view.leadReason ? ' · ' + esc(p.view.leadReason) : ''),
+      body: '<div class="alert alert-info">Use this when the client came back, took the medication and paid. The journey starts on the date you choose, the first refill is scheduled and a Justlife agent is assigned.</div>' +
+        journeySectionsHtml(t, m) + section('Note', [{ name: 'note', label: 'Note (mandatory)', type: 'textarea', required: true, full: true }]),
+      onMount: function (h, form) { bindDoctorPicker(form, function () { return p.view.companyId; }); },
+      onSubmit: function (d, rid) {
+        if (!isAdmin()) delete d.paymentDate;
+        d.clientId = p.view.clientId;
+        return api('client.convert', d, { requestId: rid }).then(function (r) { afterChange(r.alreadyConverted ? 'Journey already started' : 'Journey started' + (r.assignedAgent ? ' · agent ' + r.assignedAgent : '')); });
       }
     });
   }
@@ -1095,7 +1158,7 @@
 
   /* ---------- admin-only client actions ---------- */
   function editClientModal(p) {
-    var c = p.client;
+    var c = p.client, lead = p.view.clientStatus === 'Lead';
     formModal({
       title: 'Edit client information', size: 'lg', submitLabel: 'Save changes', subtitle: 'All changes are recorded in the audit log with before/after values.',
       body: section('Client', [
@@ -1103,12 +1166,12 @@
         { name: 'externalClientId', label: 'Client Emirates ID', required: true, value: c.External_Client_ID }, { name: 'firstBookingRef', label: 'Justlife booking ref ID', required: true, value: c.First_Booking_Ref },
         { name: 'journeyStartDate', label: 'Journey start date', type: 'date', required: true, value: c.Journey_Start_Date, hint: 'Changes the expected end date; use “Reschedule” to correct refill dates' },
         { name: 'refillIntervalDays', label: 'Refill interval (days)', type: 'number', required: true, value: c.Refill_Interval_Days, min: 7, max: 120 }
-      ]) + section('Measurements & prescription', [
-        { name: 'heightCm', label: 'Height (cm)', type: 'number', required: true, value: c.Height_Cm, step: '0.1' }, { name: 'weightKg', label: 'Weight (kg)', type: 'number', required: true, value: c.Weight_Kg, step: '0.1' },
-        { name: 'bmi', label: 'BMI', type: 'number', required: true, value: c.BMI, step: '0.1' }, { name: 'doctorName', label: 'Doctor', value: c.Doctor_Name },
+      ].filter(function (f) { return !lead || ['journeyStartDate', 'refillIntervalDays'].indexOf(f.name) < 0; })) + section(lead ? 'Measurements' : 'Measurements & prescription', [
+        { name: 'heightCm', label: 'Height (cm)', type: 'number', required: !lead, value: c.Height_Cm, step: '0.1' }, { name: 'weightKg', label: 'Weight (kg)', type: 'number', required: !lead, value: c.Weight_Kg, step: '0.1' },
+        { name: 'bmi', label: 'BMI', type: 'number', required: !lead, value: c.BMI, step: '0.1' }, { name: 'doctorName', label: 'Doctor', value: c.Doctor_Name },
         { name: 'prescribedDosage', label: 'Prescribed dosage', required: true, value: c.Prescribed_Dosage }, { name: 'startingDosage', label: 'Starting dosage', required: true, value: c.Starting_Dosage },
         { name: 'prescriptionNotes', label: 'Prescription notes', type: 'textarea', full: true, value: c.Prescription_Notes }
-      ]) + field({ name: 'reason', label: 'Reason for change (mandatory)', type: 'textarea', required: true }),
+      ].filter(function (f) { return !lead || ['doctorName', 'prescribedDosage', 'startingDosage', 'prescriptionNotes'].indexOf(f.name) < 0; })) + field({ name: 'reason', label: 'Reason for change (mandatory)', type: 'textarea', required: true }),
       onSubmit: function (d) { d.clientId = c.Client_ID; return api('client.update', d).then(function (r) { afterChange(r.updated ? 'Client updated' : 'No changes to save'); }); }
     });
   }
@@ -1250,7 +1313,8 @@
     Promise.all([api('dashboard.summary'), api('refills.board'), api('notifications.list'), api('reports.cohort')]).then(function (r) {
       var s = r[0], b = r[1].buckets, n = r[2].notifications, cohort = r[3];
       root.innerHTML = '<div class="kpis">' +
-        kpi('Total registered clients', num(s.totalClients), 'navy', '', 'go-clients') +
+        kpi('Total registered clients', num(s.totalClients), 'navy', s.leads ? (s.totalClients - s.leads) + ' started · ' + s.leads + ' leads' : '', 'go-clients') +
+        kpi('Leads (not converted)', num(s.leads), 'grey', 'Start their journey when they come back', 'go-leads') +
         kpi('Active GLP clients', num(s.active), '', s.paused ? s.paused + ' paused' : '', 'go-active') +
         kpi('Completed journeys', num(s.completed), 'green', s.awaitingReview ? s.awaitingReview + ' awaiting review' : '') +
         kpi('Stopped clients', num(s.stopped), 'grey') +
@@ -1262,7 +1326,7 @@
         (n.length ? '<div class="card"><div class="card-head"><h2>🔔 Reminders</h2><span class="muted small">' + s.unreadNotifications + ' unread</span><button class="btn btn-sm" data-action="go" data-view="notifications">View all</button></div><div class="card-body flush">' + notificationTable(n.slice(0, 6)) + '</div></div>' : '') +
         '<div class="board">' + boardCol('Overdue', 'red', b.overdue, 'open', 'No overdue refills 🎉') + boardCol('Due today', 'orange', b.today, 'open', 'Nothing due today') + boardCol('Due this week', 'orange', b.thisWeek, 'open', 'Nothing else this week') + '</div>' + cohortCard(cohort);
       $$('.kpi[data-action]', root).forEach(function (k) {
-        var map = { 'go-clients': ['clients', {}], 'go-active': ['clients', { status: 'Active' }], 'go-refills': ['refills', {}], 'go-overdue': ['clients', { status: 'Overdue' }] };
+        var map = { 'go-leads': ['clients', { status: 'Lead' }], 'go-clients': ['clients', {}], 'go-active': ['clients', { status: 'Active' }], 'go-refills': ['refills', {}], 'go-overdue': ['clients', { status: 'Overdue' }] };
         var t = map[k.getAttribute('data-action')];
         k.setAttribute('data-action', 'go'); k.setAttribute('data-view', t[0]); k.setAttribute('data-params', JSON.stringify(t[1]));
       });
@@ -1296,26 +1360,30 @@
     var p = state.params, t = todayStr();
     var sixAgo = new Date(t.slice(0, 8) + '01T00:00:00Z'); sixAgo.setUTCMonth(sixAgo.getUTCMonth() - 5);
     var def = { from: p.from || sixAgo.toISOString().slice(0, 10), to: p.to || t }; // default: last 6 calendar months
+    var gran = p.granularity || 'month';
     var companies = (state.meta.companies || []).map(function (c) { return { value: c.id, label: c.name }; });
-    setHeader('Performance dashboard', 'Overall and partner-wise performance', '<button class="btn" data-action="export" data-dataset="clients">⬇ <span class="lbl">Export</span></button>');
-    root.innerHTML = '<div class="card"><div class="card-body"><form class="toolbar" id="perf-filters">' +
+    setHeader('Performance dashboard', 'Growth, revenue, conversion and retention – overall and by partner', '<button class="btn" data-action="export" data-dataset="clients">⬇ <span class="lbl">Export</span></button>');
+    root.innerHTML = '<div class="card"><div class="card-body stack"><form class="toolbar" id="perf-filters">' +
       field({ name: 'from', label: 'From', type: 'date', value: def.from }) + field({ name: 'to', label: 'To', type: 'date', value: def.to }) +
-      field({ name: 'companyId', label: 'Company', type: 'select', options: companies, value: p.companyId, placeholder: 'All companies' }) +
-      '<div class="chips" style="align-self:center"><button type="button" class="chip" data-range="this_month">This month</button><button type="button" class="chip" data-range="3m">3 months</button><button type="button" class="chip" data-range="6m">6 months</button><button type="button" class="chip" data-range="12m">12 months</button><button type="button" class="chip" data-range="all">All time</button></div>' +
-      '</form></div></div><div id="perf">' + skeleton(8) + '</div>';
+      field({ name: 'companyId', label: 'Partner', type: 'select', options: companies, value: p.companyId, placeholder: 'All partners' }) +
+      '<div class="chips" style="align-self:center"><button type="button" class="chip" data-range="this_month">This month</button><button type="button" class="chip" data-range="last_month">Last month</button><button type="button" class="chip" data-range="3m">3 months</button><button type="button" class="chip" data-range="6m">6 months</button><button type="button" class="chip" data-range="12m">12 months</button><button type="button" class="chip" data-range="all">All time</button></div>' +
+      '</form><div class="row"><b class="small">Trend view</b><div class="chips" id="gran">' + [['day', 'Day on day'], ['week', 'Week on week'], ['month', 'Month on month']].map(function (g) { return '<button type="button" class="chip ' + (g[0] === gran ? 'active' : '') + '" data-gran="' + g[0] + '">' + g[1] + '</button>'; }).join('') + '</div></div></div></div><div id="perf">' + skeleton(8) + '</div>';
     var form = $('#perf-filters');
     var load = function () {
       destroyCharts();
       $('#perf').innerHTML = skeleton(8);
-      var f = readForm(form);
-      Promise.all([api('reports.performance', f), api('client.list', { awaitingReview: true, companyId: f.companyId }), api('reports.cohort', { companyId: f.companyId })]).then(function (r) { renderPerformance(r[0], r[1].clients); $('#perf .stack').insertAdjacentHTML('beforeend', cohortCard(r[2])); })
+      var f = readForm(form); f.granularity = gran;
+      Promise.all([api('reports.performance', f), api('client.list', { awaitingReview: true, companyId: f.companyId }), api('reports.cohort', { companyId: f.companyId })])
+        .then(function (r) { renderPerformance(r[0], r[1].clients); $('#perf > .stack').insertAdjacentHTML('beforeend', cohortCard(r[2])); })
         .catch(function (e) { $('#perf').innerHTML = errorBlock(e); });
     };
     form.addEventListener('change', load);
+    $$('[data-gran]', root).forEach(function (b) { b.onclick = function () { gran = b.getAttribute('data-gran'); $$('[data-gran]', root).forEach(function (x) { x.classList.toggle('active', x === b); }); load(); }; });
     $$('[data-range]', form).forEach(function (b) {
       b.addEventListener('click', function () {
         var r = b.getAttribute('data-range'), to = todayStr(), from;
         if (r === 'this_month') from = to.slice(0, 8) + '01';
+        else if (r === 'last_month') { var lm = new Date(to.slice(0, 8) + '01T00:00:00Z'); lm.setUTCMonth(lm.getUTCMonth() - 1); from = lm.toISOString().slice(0, 10); to = addDays(to.slice(0, 8) + '01', -1); }
         else if (r === 'all') from = '2000-01-01';
         else { var n = parseInt(r, 10); var d = new Date(to.slice(0, 8) + '01T00:00:00Z'); d.setUTCMonth(d.getUTCMonth() - (n - 1)); from = d.toISOString().slice(0, 10); }
         form.from.value = from; form.to.value = to; load();
@@ -1324,39 +1392,82 @@
     load();
   }
 
+  /* KPI with change vs the previous period of the same length */
+  function kpiDelta(label, cur, prev, fmt, cls, hint, inverse) {
+    var d = '';
+    if (prev !== undefined && prev !== null) {
+      if (!prev && !cur) d = '<span class="delta flat">— no change</span>';
+      else if (!prev) d = '<span class="delta up">▲ new</span>';
+      else {
+        var ch = Math.round((cur - prev) / Math.abs(prev) * 1000) / 10, good = inverse ? ch < 0 : ch > 0;
+        d = '<span class="delta ' + (ch === 0 ? 'flat' : (good ? 'up' : 'down')) + '">' + (ch > 0 ? '▲ ' : (ch < 0 ? '▼ ' : '')) + Math.abs(ch) + '%</span> <span class="muted">vs ' + fmt(prev) + '</span>';
+      }
+    }
+    return '<div class="kpi ' + (cls || '') + '"><div class="label">' + esc(label) + '</div><div class="value">' + fmt(cur) + '</div><div class="hint">' + d + (hint ? (d ? ' · ' : '') + esc(hint) : '') + '</div></div>';
+  }
+  function bucketLabel(k, gran) {
+    if (gran === 'month') return monthLabel(k);
+    var p = k.split('-'); var l = p[2] + ' ' + MONTHS[+p[1] - 1];
+    return gran === 'week' ? 'w/c ' + l : l;
+  }
+
   function renderPerformance(r, review) {
-    var k = r.kpi, cur = r.currency;
+    var k = r.kpi, cur = r.currency, C = r.current, P = r.previous, g = r.granularity;
     var rows = r.partners;
-    var tot = function (f) { return rows.reduce(function (s, x) { return s + (x[f] || 0); }, 0); };
-    $('#perf').innerHTML = '<div class="stack"><div class="kpis">' +
-      kpi('Registered clients', num(k.totalClients), 'navy', 'In selected period') + kpi('Active clients', num(k.active), '', 'Incl. overdue') + kpi('Completed journeys', num(k.completed), 'green') +
-      kpi('Stopped clients', num(k.stopped), 'grey') + kpi('Overdue clients', num(k.overdueNow), 'red', 'Right now, all periods') + kpi('Upcoming refills', num(k.upcomingRefillsNow), 'orange', 'Open refills right now') +
-      kpi('Completed refills', num(k.refillsCompleted), 'green', 'In period') + kpi('Expected refills', num(k.refillsExpected), 'navy', 'Due in period') +
-      kpi('Payments collected', money(k.revenue, cur), 'purple', 'Paid only') + kpi('Upsell revenue', money(k.upsell, cur), 'purple', r.definitions.upsell) +
-      kpi('Client retention', pct(k.retentionPct), 'green', 'Not stopped ÷ started') + kpi('Refill completion', pct(k.refillCompletionPct), '', 'Completed ÷ due to date') +
-      kpi('Conversion', pct(k.conversionPct), 'navy', r.definitions.conversion) + '</div>' +
+    var M = function (v) { return money(v, cur); }, N = function (v) { return num(v); }, PCT = function (v) { return v === null || v === undefined ? '—' : v + '%'; };
+    var prevTxt = r.previousRange ? fmtDate(r.previousRange.from) + ' – ' + fmtDate(r.previousRange.to) : '';
+    var labels = r.series.map(function (x) { return bucketLabel(x.key, g); });
+    var gName = { day: 'Day on day', week: 'Week on week', month: 'Month on month' }[g];
+    // growth table rows (newest first) with change vs previous bucket
+    var grow = r.series.map(function (x, i) {
+      var pr = r.series[i - 1];
+      var dl = function (a, b) { if (!pr) return ''; if (!b) return a ? '<span class="delta up">new</span>' : ''; var c = Math.round((a - b) / b * 1000) / 10; return '<span class="delta ' + (c > 0 ? 'up' : (c < 0 ? 'down' : 'flat')) + '">' + (c > 0 ? '▲' : (c < 0 ? '▼' : '')) + Math.abs(c) + '%</span>'; };
+      return '<tr><td class="strong nowrap">' + esc(bucketLabel(x.key, g)) + '</td><td class="num">' + N(x.registrations) + '</td><td class="num">' + N(x.converted) + '</td><td class="num">' + N(x.leads) + '</td><td class="num">' + (x.registrations ? Math.round((x.registrations - x.leads) / x.registrations * 100) + '%' : '—') + '</td>' +
+        '<td class="num strong">' + M(x.revenue) + '</td><td class="num">' + dl(x.revenue, pr && pr.revenue) + '</td><td class="num">' + M(x.regRevenue) + '</td><td class="num">' + M(x.refillRevenue) + '</td><td class="num">' + N(x.refillsDone) + '</td><td class="num">' + N(x.refillsDue) + '</td></tr>';
+    }).reverse().join('');
+    $('#perf').innerHTML = '<div class="stack">' +
+      '<div class="section-title"><h2>Business overview</h2><span class="muted small">' + (r.from ? fmtDate(r.from) : 'All time') + ' → ' + fmtDate(r.to) + (prevTxt ? ' · compared with ' + prevTxt : '') + '</span></div>' +
+      '<div class="kpis">' +
+      kpiDelta('Registrations', C.registrations, P.registrations, N, 'navy', 'incl. leads') + kpiDelta('Journeys started', C.converted, P.converted, N, 'green', 'converted') +
+      kpiDelta('Lead conversion', C.leadConversionPct, P.leadConversionPct, PCT, '', 'registered → journey') + kpiDelta('Leads (not converted)', C.leads, P.leads, N, 'grey', '', true) +
+      kpiDelta('Revenue collected', C.revenue, P.revenue, M, 'purple', 'Paid only') + kpiDelta('New-client revenue', C.regRevenue, P.regRevenue, M, 'navy') +
+      kpiDelta('Refill revenue', C.refillRevenue, P.refillRevenue, M, '') + kpiDelta('Refills completed', C.refills, P.refills, N, 'green') +
+      kpiDelta('Paying clients', C.payingClients, P.payingClients, N, '') + kpiDelta('Avg revenue / paying client', C.avgPerClient, P.avgPerClient, M, 'purple') + '</div>' +
+      '<div class="section-title"><h2>Client health</h2><span class="muted small">Clients registered in the period, plus live operational numbers</span></div>' +
+      '<div class="kpis">' + kpi('Active journeys', N(k.active), '', 'Incl. overdue') + kpi('Completed journeys', N(k.completed), 'green') + kpi('Stopped', N(k.stopped), 'grey') +
+      kpi('Overdue clients', N(k.overdueNow), 'red', 'Right now') + kpi('Upcoming refills', N(k.upcomingRefillsNow), 'orange', 'Open right now') +
+      kpi('Retention', PCT(k.retentionPct), 'green', 'Not stopped ÷ started') + kpi('Refill completion', PCT(k.refillCompletionPct), '', N(k.refillsMissed) + ' missed') + kpi('Refill conversion', PCT(k.conversionPct), 'navy', r.definitions.conversion) + '</div>' +
+      '<div class="section-title"><h2>Trends – ' + esc(gName) + '</h2>' + (g !== (state.params.granularity || g) ? '' : '') + '</div>' +
+      '<div class="grid-2">' + chartBox('ch-t-rev', 'Revenue trend', 'Total, new clients and refills · Paid only') + chartBox('ch-t-cli', 'Client trend', 'Registrations, journeys started and leads') + '</div>' +
+      '<div class="grid-2">' + chartBox('ch-t-ref', 'Refill trend', 'Refills due vs completed') + chartBox('ch-t-conv', 'Lead conversion trend', '% of registrations that started a journey') + '</div>' +
+      '<div class="card"><div class="card-head"><h2>' + esc(gName) + ' growth table</h2><span class="muted small">Newest first · change vs previous ' + g + '</span></div><div class="card-body flush"><div class="table-wrap"><table class="table"><thead><tr><th>Period</th><th class="num">Registrations</th><th class="num">Journeys started</th><th class="num">Leads</th><th class="num">Conversion</th><th class="num">Revenue</th><th class="num">Growth</th><th class="num">New-client rev.</th><th class="num">Refill rev.</th><th class="num">Refills done</th><th class="num">Refills due</th></tr></thead><tbody>' + (grow || '<tr><td colspan="11">' + emptyState('No data') + '</td></tr>') + '</tbody></table></div></div></div>' +
+      '<div class="section-title"><h2>Partners</h2></div>' +
+      '<div class="grid-2">' + chartBox('ch-rev', 'Partner-wise revenue', 'New registrations + refills · Paid only') + chartBox('ch-p-cli', 'Partner-wise clients', 'Journeys started vs leads') + '</div>' +
+      '<div class="grid-2">' + chartBox('ch-p-ref', 'Partner-wise refills', 'Completed vs missed (due to date)') + chartBox('ch-p-health', 'Partner-wise journey health', 'Active · completed · paused · stopped') + '</div>' +
       '<div class="card"><div class="card-head"><h2>Partner-wise performance</h2><span class="muted small">' + (r.from ? fmtDate(r.from) : 'All time') + ' → ' + fmtDate(r.to) + '</span></div><div class="card-body flush"><div class="table-wrap"><table class="table"><thead><tr>' +
-      '<th>Partner</th><th class="num">New clients</th><th class="num">Active</th><th class="num">Completed</th><th class="num">Stopped</th><th class="num">Refills due</th><th class="num">Refills completed</th><th class="num">Overdue</th><th class="num">Retention</th><th class="num">Conversion</th><th class="num">Revenue</th></tr></thead><tbody>' +
+      '<th>Partner</th><th class="num">Registered</th><th class="num">Leads</th><th class="num">Started</th><th class="num">Lead conv.</th><th class="num">Active</th><th class="num">Completed</th><th class="num">Stopped</th><th class="num">Refills due</th><th class="num">Refills done</th><th class="num">Overdue</th><th class="num">Retention</th><th class="num">Revenue</th></tr></thead><tbody>' +
       (rows.length ? rows.map(function (x) {
-        return '<tr class="clickable" data-action="go" data-view="clients" data-params="' + esc(JSON.stringify({ companyId: x.companyId })) + '"><td class="strong">' + esc(x.companyName) + (x.status !== 'Active' ? ' ' + badge('Inactive', 'grey') : '') + '</td><td class="num">' + num(x.newClients) + '</td><td class="num">' + num(x.active) + '</td><td class="num">' + num(x.completed) + '</td><td class="num">' + num(x.stopped) + '</td>' +
-          '<td class="num">' + num(x.refillsDue) + '</td><td class="num">' + num(x.refillsCompleted) + '</td><td class="num">' + (x.overdue ? '<b style="color:var(--red)">' + num(x.overdue) + '</b>' : 0) + '</td><td class="num">' + pct(x.retentionPct) + '</td><td class="num">' + pct(x.conversionPct) + '</td><td class="num strong">' + money(x.revenue, cur) + '</td></tr>';
-      }).join('') : '<tr><td colspan="11">' + emptyState('No partner companies yet') + '</td></tr>') +
-      '</tbody>' + (rows.length > 1 ? '<tfoot><tr><td>Total</td><td class="num">' + num(tot('newClients')) + '</td><td class="num">' + num(tot('active')) + '</td><td class="num">' + num(tot('completed')) + '</td><td class="num">' + num(tot('stopped')) + '</td><td class="num">' + num(tot('refillsDue')) + '</td><td class="num">' + num(tot('refillsCompleted')) + '</td><td class="num">' + num(tot('overdue')) + '</td><td class="num">' + pct(k.retentionPct) + '</td><td class="num">' + pct(k.conversionPct) + '</td><td class="num">' + money(k.revenue, cur) + '</td></tr></tfoot>' : '') +
-      '</table></div></div></div>' +
-      '<div class="grid-2">' + chartBox('ch-reg', 'New client registrations by partner') + chartBox('ch-refill', 'Monthly refill performance', 'Due vs completed') + '</div>' +
-      '<div class="grid-2">' + chartBox('ch-rev', 'Partner-wise revenue', 'Paid only · new registrations + refills') + chartBox('ch-conv', 'Partner-wise conversion', r.definitions.conversion) + '</div>' +
-      '<div class="grid-3">' + chartBox('ch-ret', 'Client retention by partner') + chartBox('ch-over', 'Overdue refills by partner') + chartBox('ch-ups', 'Monthly upsell performance') + '</div>' +
-      '<div class="card"><div class="card-head"><h2>Journeys awaiting completion review</h2><span class="count-pill">' + review.length + '</span></div><div class="card-body flush">' + clientsTable(review, { emptyText: 'No journeys awaiting review' }) + '</div></div>' +
+        return '<tr class="clickable" data-action="go" data-view="clients" data-params="' + esc(JSON.stringify({ companyId: x.companyId })) + '"><td class="strong">' + esc(x.companyName) + (x.status !== 'Active' ? ' ' + badge('Inactive', 'grey') : '') + '</td><td class="num">' + N(x.newClients) + '</td><td class="num">' + N(x.leads) + '</td><td class="num">' + N(x.converted) + '</td><td class="num">' + PCT(x.leadConversionPct) + '</td><td class="num">' + N(x.active) + '</td><td class="num">' + N(x.completed) + '</td><td class="num">' + N(x.stopped) + '</td>' +
+          '<td class="num">' + N(x.refillsDue) + '</td><td class="num">' + N(x.refillsCompleted) + '</td><td class="num">' + (x.overdue ? '<b style="color:var(--red)">' + N(x.overdue) + '</b>' : 0) + '</td><td class="num">' + PCT(x.retentionPct) + '</td><td class="num strong">' + M(x.revenue) + '</td></tr>';
+      }).join('') : '<tr><td colspan="13">' + emptyState('No partner companies yet') + '</td></tr>') + '</tbody></table></div></div></div>' +
+      '<div class="section-title"><h2>Products & journey</h2></div>' +
+      '<div class="grid-2">' + chartBox('ch-med', 'Medication mix', 'Revenue share by medication · Paid only') + chartBox('ch-funnel', 'Journey funnel', 'Of clients who started in the period, how many reached each month') + '</div>' +
+      '<div class="grid-2">' + chartBox('ch-lead', 'Why leads did not convert', 'Leads registered in the period') + '<div class="card"><div class="card-head"><h2>Journeys awaiting completion review</h2><span class="count-pill">' + review.length + '</span></div><div class="card-body flush">' + clientsTable(review, { emptyText: 'No journeys awaiting review' }) + '</div></div></div>' +
       '<div class="card"><div class="card-head"><h2>Metric definitions</h2><a href="#/settings" class="small">Configure</a></div><div class="card-body">' +
-      kv([['Conversion', r.definitions.conversion], ['Conversion denominator', r.definitions.conversionDenominator], ['Retention', r.definitions.retention], ['Refill completion', r.definitions.refillCompletion], ['Upsell revenue', r.definitions.upsell]]) + '</div></div></div>';
-    var names = rows.map(function (x) { return x.companyName; });
-    makeChart('ch-reg', 'bar', names, [{ label: 'New clients', data: rows.map(function (x) { return x.newClients; }), color: PALETTE[1] }]);
-    makeChart('ch-refill', 'bar', r.monthly.map(function (m) { return monthLabel(m.month); }), [{ label: 'Due', data: r.monthly.map(function (m) { return m.due; }), color: PALETTE[2] }, { label: 'Completed', data: r.monthly.map(function (m) { return m.completed; }), color: PALETTE[3] }]);
+      kv([['Lead conversion', 'Registrations that started a journey (medication given + payment collected) ÷ all registrations'], ['Refill conversion', r.definitions.conversion], ['Retention', r.definitions.retention], ['Refill completion', r.definitions.refillCompletion], ['Upsell revenue', r.definitions.upsell], ['Comparison', 'Each KPI compares with the previous period of the same length']]) + '</div></div></div>';
+    var S = r.series;
+    makeChart('ch-t-rev', 'line', labels, [{ label: 'Total revenue', data: S.map(function (x) { return x.revenue; }), color: PALETTE[0] }, { label: 'New clients', data: S.map(function (x) { return x.regRevenue; }), color: PALETTE[1], fill: false }, { label: 'Refills', data: S.map(function (x) { return x.refillRevenue; }), color: PALETTE[3], fill: false }], { money: true });
+    makeChart('ch-t-cli', 'line', labels, [{ label: 'Registrations', data: S.map(function (x) { return x.registrations; }), color: PALETTE[0] }, { label: 'Journeys started', data: S.map(function (x) { return x.converted; }), color: PALETTE[3], fill: false }, { label: 'Leads', data: S.map(function (x) { return x.leads; }), color: PALETTE[8], fill: false }]);
+    makeChart('ch-t-ref', 'line', labels, [{ label: 'Refills due', data: S.map(function (x) { return x.refillsDue; }), color: PALETTE[4], fill: false }, { label: 'Refills completed', data: S.map(function (x) { return x.refillsDone; }), color: PALETTE[3] }]);
+    makeChart('ch-t-conv', 'line', labels, [{ label: 'Lead conversion %', data: S.map(function (x) { return x.registrations ? Math.round((x.registrations - x.leads) / x.registrations * 1000) / 10 : null; }), color: PALETTE[5] }], { pct: true });
     partnerStackChart('ch-rev', rows.filter(function (x) { return x.revenue > 0; }));
-    makeChart('ch-conv', 'bar', names, [{ label: 'Conversion %', data: rows.map(function (x) { return x.conversionPct || 0; }), color: PALETTE[1] }], { pct: true });
-    makeChart('ch-ret', 'bar', names, [{ label: 'Retention %', data: rows.map(function (x) { return x.retentionPct || 0; }), color: PALETTE[3] }], { pct: true });
-    makeChart('ch-over', 'bar', names, [{ label: 'Overdue clients', data: rows.map(function (x) { return x.overdue; }), color: PALETTE[6] }]);
-    makeChart('ch-ups', 'line', r.monthly.map(function (m) { return monthLabel(m.month); }), [{ label: 'Upsell', data: r.monthly.map(function (m) { return m.upsell; }), color: PALETTE[5] }, { label: 'All revenue', data: r.monthly.map(function (m) { return m.revenue; }), color: PALETTE[0], fill: false }], { money: true });
+    var names = rows.map(function (x) { return x.companyName; });
+    stackChart('ch-p-cli', names, [{ label: 'Journeys started', data: rows.map(function (x) { return x.converted; }), color: '#059669', unit: 'started' }, { label: 'Leads', data: rows.map(function (x) { return x.leads; }), color: '#94A3B8', unit: 'leads' }], { totalFmt: function (v) { return v + ' registered'; } });
+    stackChart('ch-p-ref', names, [{ label: 'Completed', data: rows.map(function (x) { return x.refillsCompleted; }), color: '#2563EB', unit: 'done' }, { label: 'Missed', data: rows.map(function (x) { return x.refillsMissed; }), color: '#DC2626', unit: 'missed' }], { totalFmt: function (v) { return v + ' refills'; } });
+    stackChart('ch-p-health', names, [{ label: 'Active', data: rows.map(function (x) { return x.active; }), color: '#2563EB', unit: 'active' }, { label: 'Completed', data: rows.map(function (x) { return x.completed; }), color: '#059669', unit: 'completed' }, { label: 'Paused', data: rows.map(function (x) { return x.paused; }), color: '#7C3AED', unit: 'paused' }, { label: 'Stopped', data: rows.map(function (x) { return x.stopped; }), color: '#94A3B8', unit: 'stopped' }], { totalFmt: function (v) { return v + ' journeys'; } });
+    stackChart('ch-med', r.medications.map(function (x) { return x.name.replace(/ \(.*\)/, ''); }), [{ label: 'Revenue', data: r.medications.map(function (x) { return x.revenue; }), counts: r.medications.map(function (x) { return x.clients; }), unit: 'clients', color: '#0B2545' }], { money: true, share: true, legend: false });
+    stackChart('ch-funnel', r.funnel.steps.map(function (x) { return 'Month ' + x.month; }), [{ label: 'Clients', data: r.funnel.steps.map(function (x) { return x.clients; }), color: '#13A89E', unit: 'clients', pctOf: r.funnel.started }], { legend: false });
+    stackChart('ch-lead', r.leadReasons.map(function (x) { return x.reason; }), [{ label: 'Leads', data: r.leadReasons.map(function (x) { return x.count; }), color: '#94A3B8', unit: 'leads' }], { share: true, legend: false });
   }
 
   /* ---------- Upsell & payment tracker ---------- */
