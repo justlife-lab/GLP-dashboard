@@ -317,3 +317,23 @@ dl { margin: 0; }
 .cohort-cell { font-weight: 600; color: var(--ink); min-width: 78px; }
 .cohort-cell.partial { outline: 1.5px dashed #F97316; outline-offset: -3px; color: var(--ink-2); }
 .cohort-cell .so-far { font-size: 10.5px; font-weight: 500; opacity: .75; }
+
+/* ---------- agent calling ---------- */
+.btn-wa { background: #25D366; border-color: #25D366; color: #fff !important; text-decoration: none !important; }
+.btn-wa:hover { background: #1EBE5A; border-color: #1EBE5A; }
+.btn.btn-lg.btn-wa { padding: 9px 15px; font-size: 14px; border-radius: 10px; }
+.cl-week { background: #E0F2F1; color: #0F766E; border-color: #99F6E4; }
+.cl-week2 { background: #E8EEFC; color: #3B5BDB; border-color: #C7D2FE; }
+.cl-refill { background: #FEF3C7; color: #92400E; border-color: #FDE68A; }
+.cl-callback { background: #FDE8E1; color: #B4451F; border-color: #F9C9B7; }
+.jsum { background: #F1F5F4; border-radius: 14px; padding: 16px 18px; display: flex; flex-direction: column; gap: 8px; }
+.jsum .jname { color: var(--navy); font-size: 15px; }
+.jstats { display: grid; grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 10px; margin-top: 4px; }
+.jstats b { display: block; font-size: 17px; color: var(--navy); }
+.jstats span { font-size: 12px; color: var(--muted); }
+.lastcall { background: #fff; border-left: 3px solid #C2410C; border-radius: 8px; padding: 10px 12px; font-size: 13px; }
+.lastcall .lc-head { font-size: 11.5px; font-weight: 800; letter-spacing: .04em; color: #9A3412; margin-bottom: 3px; }
+.calltl .dot { background: #0F9F8F !important; }
+.calltl .st-overdue .dot { background: var(--red) !important; }
+.calltl .st-upcoming .dot, .calltl .st-due-today .dot { background: #FDBA74 !important; }
+.calltl li { padding-bottom: 16px; }

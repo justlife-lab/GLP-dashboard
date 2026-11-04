@@ -63,7 +63,29 @@
     });
     return h;
   }
-  function isAdmin() { return PORTAL === 'admin'; }
+  function isAgent() { return !!(state.user && state.user.type === 'agent'); }
+  function isAdmin() { return PORTAL === 'admin' && !isAgent(); }  // full admin
+  function isStaff() { return PORTAL === 'admin'; }                 // admin or Justlife agent
+  function navKey() { return isAgent() ? 'agent' : PORTAL; }
+  /* WhatsApp click-to-chat with the agreed Justlife templates */
+  function waNumber(phone) {
+    var d = String(phone || '').replace(/\D/g, '');
+    if (d.indexOf('00') === 0) d = d.slice(2);
+    if (d.charAt(0) === '0') d = '971' + d.slice(1);
+    if (d.length === 9 && d.charAt(0) === '5') d = '971' + d;
+    return d;
+  }
+  function waText(name, kind) {
+    var first = String(name || '').trim().split(/\s+/)[0] || 'there';
+    first = first.charAt(0).toUpperCase() + first.slice(1);
+    if (kind === 'refill') return 'Hi ' + first + ', this is Justlife.\nJust a quick reminder that your upcoming medication refill is due soon. If you’d like assistance arranging your next delivery, please reply to this message.\n\nThank you,\nJustlife';
+    return 'Hi ' + first + ', this is Justlife.\nWe hope you’re doing well with your treatment. We just wanted to check in and see how things are going.\nIf you have any concerns about your treatment, are experiencing any health issues, or would like to speak with a doctor, please let us know. We can arrange a free consultation with a doctor to discuss your concerns.\nYour wellbeing is important to us.\nJustlife Team';
+  }
+  function waButton(phone, name, kind, extraCls) {
+    var n = waNumber(phone);
+    if (!n) return '';
+    return '<a class="btn btn-sm btn-wa ' + (extraCls || '') + '" data-action="wa" target="_blank" rel="noopener" title="Send ' + (kind === 'refill' ? 'refill reminder' : 'wellbeing check-in') + ' on WhatsApp" href="https://wa.me/' + esc(n) + '?text=' + encodeURIComponent(waText(name, kind)) + '">WhatsApp</a>';
+  }
 
   /* ===========================================================================
    * 2. API CLIENT  (text/plain POST = CORS "simple request", no preflight)
@@ -172,7 +194,7 @@
       (f.maxlength ? ' maxlength="' + f.maxlength + '"' : '') + (f.placeholder ? ' placeholder="' + esc(f.placeholder) + '"' : '') + (f.attrs || '');
     var v = f.value === undefined || f.value === null ? '' : f.value;
     var input;
-    if (f.type === 'select') input = '<select id="' + id + '" name="' + esc(f.name) + '"' + req + dis + extra + '>' + opts(f.options, v, f.placeholder === undefined ? (f.required ? 'Select…' : '—') : f.placeholder) + '</select>';
+    if (f.type === 'select') input = '<select id="' + id + '" name="' + esc(f.name) + '"' + req + dis + extra + '>' + opts(f.options, v, f.noPlaceholder ? undefined : (f.placeholder === undefined ? (f.required ? 'Select…' : '—') : f.placeholder)) + '</select>';
     else if (f.type === 'textarea') input = '<textarea id="' + id + '" name="' + esc(f.name) + '"' + req + ro + dis + extra + ' maxlength="' + (f.maxlength || 3000) + '">' + esc(v) + '</textarea>';
     else if (f.type === 'checkbox') return '<label class="check ' + (f.full ? 'full' : '') + '"><input type="checkbox" name="' + esc(f.name) + '"' + (v ? ' checked' : '') + dis + extra + '> ' + esc(f.label) + '</label>';
     else input = '<input id="' + id + '" type="' + (f.type || 'text') + '" name="' + esc(f.name) + '" value="' + esc(v) + '"' + req + ro + dis + extra + '>';
@@ -478,6 +500,10 @@
    * 6. SHELL + ROUTER
    * ========================================================================= */
   var NAV = {
+    agent: [
+      { section: 'Justlife agent' },
+      { id: 'calling', label: 'Agent Calling', ico: '📞', count: 'callsPending' }
+    ],
     admin: [
       { section: 'Overview' },
       { id: 'dashboard', label: 'Performance', ico: '📊' },
@@ -485,6 +511,8 @@
       { id: 'refills', label: 'Refills & Reminders', ico: '💊', count: 'overdue' },
       { id: 'payments', label: 'Upsell & Payments', ico: '💳' },
       { id: 'upsell', label: 'Upsell Creation', ico: '🧾', count: 'upsellPending' },
+      { section: 'Agent Calling' },
+      { id: 'calling', label: 'Agent Calling', ico: '📞', count: 'callsPending' },
       { section: 'Administration' },
       { id: 'companies', label: 'Companies & Partners', ico: '🏥' },
       { id: 'admins', label: 'Admin Users', ico: '🛡️' },
@@ -514,7 +542,7 @@
   function renderNav(counts) {
     counts = counts || state.navCounts || {};
     state.navCounts = counts;
-    $('#nav').innerHTML = NAV[PORTAL].map(function (n) {
+    $('#nav').innerHTML = NAV[navKey()].map(function (n) {
       if (n.section) return '<div class="nav-section">' + esc(n.section) + '</div>';
       var c = n.count && counts[n.count] ? '<span class="count">' + esc(counts[n.count]) + '</span>' : '';
       return '<a href="#/' + n.id + '" data-nav="' + n.id + '" class="' + (state.view === n.id ? 'active' : '') + '"><span class="ico" aria-hidden="true">' + n.ico + '</span>' + esc(n.label) + c + '</a>';
@@ -522,7 +550,7 @@
   }
   function renderUserBox() {
     var u = state.user;
-    $('#user-box').innerHTML = '<div><div class="name">' + esc(u.name) + '</div><div class="meta">' + esc(isAdmin() ? u.email + ' · ' + u.role : u.companyName) + '</div></div>' +
+    $('#user-box').innerHTML = '<div><div class="name">' + esc(u.name) + '</div><div class="meta">' + esc(isStaff() ? u.email + ' · ' + u.role : u.companyName) + '</div></div>' +
       '<button class="btn btn-sm" data-action="logout">Sign out</button>';
   }
   function setHeader(title, sub, actions) {
@@ -534,8 +562,9 @@
   function route() {
     if (!state.user || !state.meta) return; // not signed in / still booting
     var h = (location.hash || '').replace(/^#\/?/, '');
-    var parts = h.split('?'), id = parts[0] || 'dashboard';
-    if (!VIEWS[PORTAL][id]) id = 'dashboard';
+    var V = VIEWS[navKey()], home = isAgent() ? 'calling' : 'dashboard';
+    var parts = h.split('?'), id = parts[0] || home;
+    if (!V[id]) id = home;
     state.params = {};
     (parts[1] || '').split('&').forEach(function (kv) { if (kv) { var p = kv.split('='); state.params[decodeURIComponent(p[0])] = decodeURIComponent(p[1] || ''); } });
     state.view = id;
@@ -544,7 +573,7 @@
     $('#app').classList.remove('nav-open');
     $('#view').innerHTML = skeleton(4);
     window.scrollTo(0, 0);
-    state.refresh = function () { VIEWS[PORTAL][id]($('#view')); };
+    state.refresh = function () { V[id]($('#view')); };
     state.refresh();
     refreshCounts();
   }
@@ -555,11 +584,16 @@
   }
   window.addEventListener('hashchange', route);
   function refreshCounts() {
+    if (isAgent()) {
+      api('calling.list', { preset: 'today', agentId: state.user.agentId }).then(function (r) { renderNav({ callsPending: r.summary.pendingToday + r.summary.overdue }); }).catch(function () {});
+      return;
+    }
     var calls = [api('dashboard.summary', {})];
+    if (isAdmin()) calls.push(api('calling.list', { preset: 'today' }));
     if (isAdmin()) calls.push(api('upsell.list', { preset: 'all', upsellStatus: 'Pending' }));
     Promise.all(calls).then(function (r) {
-      var s = r[0], up = r[1];
-      renderNav({ overdue: s.refillsOverdue, unread: s.unreadNotifications, upsellPending: up ? up.counts.registrations.pending + up.counts.refills.pending : 0 });
+      var s = r[0], cl = isAdmin() ? r[1] : null, up = isAdmin() ? r[2] : null;
+      renderNav({ overdue: s.refillsOverdue, unread: s.unreadNotifications, upsellPending: up ? up.counts.registrations.pending + up.counts.refills.pending : 0, callsPending: cl ? cl.summary.pendingToday + cl.summary.overdue : 0 });
     }).catch(function () {});
   }
   function refreshAll() { if (state.refresh) state.refresh(); refreshCounts(); }
@@ -575,7 +609,10 @@
     'reschedule': function (el) { withClient(el.getAttribute('data-id'), rescheduleModal); },
     'go': function (el) { var p = {}; var raw = el.getAttribute('data-params'); if (raw) { try { p = JSON.parse(raw); } catch (e) {} } go(el.getAttribute('data-view'), p); },
     'export': function (el) { exportModal(el.getAttribute('data-dataset')); },
-    'change-password': function () { changePasswordModal(false); }
+    'change-password': function () { changePasswordModal(false); },
+    'wa': function (el) { window.open(el.getAttribute('href'), '_blank', 'noopener'); },
+    'call-journey': function (el) { openCallJourney(el.getAttribute('data-id')); },
+    'log-call': function (el) { logCallModal(el.getAttribute('data-id'), el.getAttribute('data-key')); }
   };
   document.addEventListener('click', function (e) {
     var el = e.target.closest('[data-action]');
@@ -635,9 +672,10 @@
       var f = readForm(form);
       if (!isAdmin()) { delete f.companyId; }
       api('client.list', f).then(function (r) {
+        if (!$('#client-table')) return; // user navigated away
         $('#client-table').innerHTML = clientsTable(r.clients, { actions: true });
         $('#client-count').textContent = r.total + ' client' + (r.total === 1 ? '' : 's');
-      }).catch(function (e) { $('#client-table').innerHTML = errorBlock(e); });
+      }).catch(function (e) { if ($('#client-table')) $('#client-table').innerHTML = errorBlock(e); });
     };
     form.addEventListener('input', debounce(load, 350));
     form.addEventListener('change', load);
@@ -660,7 +698,7 @@
     api('client.get', { clientId: ap.id }).then(function (p) { if (activeProfile === ap) renderProfile(p); })
       .catch(function (e) { ap.modal.body(errorBlock(e)); });
   }
-  function afterChange(msg) { toast(msg, 'success'); loadProfile(); refreshAll(); }
+  function afterChange(msg) { toast(msg, 'success'); loadProfile(); loadCallJourney(); refreshAll(); }
 
   function renderProfile(p) {
     var ap = activeProfile, v = p.view, j = v.journey, c = p.client, m = ap.modal;
@@ -669,9 +707,11 @@
     var canResched = j.nextScheduleId && ['Stopped', 'Completed'].indexOf(j.status) < 0;
     var actions = (canRefill ? '<button class="btn btn-success" data-p="refill">＋ Record refill</button>' : '') +
       (canResched ? '<button class="btn" data-p="reschedule">📅 Reschedule</button>' : '') +
-      (['Stopped', 'Completed'].indexOf(j.status) < 0 ? '<button class="btn" data-p="medication">💊 Update medication</button>' : '') +
+      (['Stopped', 'Completed'].indexOf(j.status) < 0 && !isAgent() ? '<button class="btn" data-p="medication">💊 Update medication</button>' : '') +
       (j.status !== 'Stopped' ? '<button class="btn ' + (j.awaitingReview || j.status === 'Completed' ? 'btn-blue' : '') + '" data-p="extend">⏩ Extend journey</button>' : '') +
-      '<button class="btn" data-p="note">📝 Add note</button><button class="btn" data-p="doctor">🩺 Doctor note</button>';
+      '<button class="btn" data-p="note">📝 ' + (isStaff() ? 'Add note / instruction' : 'Add note') + '</button><button class="btn" data-p="doctor">🩺 Doctor note</button>' +
+      (j.nextScheduleId ? waButton(v.phone, v.fullName, 'refill', 'btn-lg') : '') +
+      (isStaff() ? '<button class="btn" data-p="calls">📞 Call journey</button>' : '');
     if (isAdmin()) {
       actions += '<button class="btn" data-p="edit">✏️ Edit client</button>';
       if (j.storedStatus === 'Active') actions += '<button class="btn" data-p="pause">⏸ Pause</button><button class="btn btn-danger" data-p="stop">⏹ Stop</button>';
@@ -679,11 +719,15 @@
       if (j.storedStatus !== 'Completed' && j.storedStatus !== 'Stopped') actions += '<button class="btn ' + (j.awaitingReview ? 'btn-primary' : '') + '" data-p="complete">✅ Confirm completion</button>';
     }
     var tabs = [['overview', 'Overview'], ['refills', 'Refills (' + p.refills.length + ')'], ['payments', 'Payments (' + p.payments.length + ')'], ['timeline', 'Full history'], ['notes', 'Notes (' + (p.notes.length + p.doctorNotes.length) + ')'], ['reschedules', 'Reschedules (' + p.reschedules.length + ')']];
+    if (isStaff()) tabs.push(['calls', 'Calls (' + (p.callLogs || []).length + ')']);
     if (isAdmin()) tabs.push(['audit', 'Audit (' + (p.audit || []).length + ')']);
+    var instr = p.notes.filter(function (n) { return n.Note_Type === 'AGENT'; }).slice(-3).reverse();
 
     var html = '<div class="profile-head"><div class="avatar">' + esc(initials(v.fullName)) + '</div><div class="grow">' +
       '<div class="row">' + statusBadge(j) + (j.refillStatus ? badge('Refill: ' + j.refillStatus, REFILL_CLS[j.refillStatus] || 'grey') : '') + '</div>' +
-      '<div class="muted small" style="margin-top:6px">Emirates ID <b>' + esc(v.externalClientId) + '</b> · ' + esc(v.phone) + (isAdmin() ? ' · ' + esc(v.companyName) : '') + ' · Internal ' + esc(v.clientId) + '</div></div></div>' +
+      '<div class="muted small" style="margin-top:6px">Emirates ID <b>' + esc(v.externalClientId) + '</b> · ' + esc(v.phone) + (isStaff() ? ' · ' + esc(v.companyName) : '') + ' · Internal ' + esc(v.clientId) +
+      (isStaff() ? ' · Agent <b>' + esc(p.assignedAgent ? p.assignedAgent.name : 'Unassigned') + '</b>' : '') + '</div></div></div>' +
+      (instr.length ? '<div class="alert alert-info"><b>📌 Instructions from Justlife</b>' + instr.map(function (n) { return '<div style="margin-top:4px">' + esc(n.Note) + ' <span class="muted small">— ' + esc(n.Created_By_Name) + ', ' + fmtDateTime(n.Created_At) + '</span></div>'; }).join('') + '</div>' : '') +
       (j.awaitingReview ? '<div class="alert alert-warn">All ' + j.months + ' journey months have been supplied. ' + (isAdmin() ? 'Review the history and confirm completion.' : 'Justlife will review and confirm completion.') + '</div>' : '') +
       (j.statusReason && ['Paused', 'Stopped'].indexOf(j.status) >= 0 ? '<div class="alert alert-info">' + esc(j.status) + ': ' + esc(j.statusReason) + '</div>' : '') +
       '<div class="profile-actions">' + actions + '</div>' +
@@ -702,7 +746,7 @@
       refill: function () { refillModal(p); }, reschedule: function () { rescheduleModal(p); }, medication: function () { medicationModal(p); },
       note: function () { noteModal(p); }, doctor: function () { doctorNoteModal(p); }, edit: function () { editClientModal(p); },
       pause: function () { journeyStatusModal(p, 'Paused'); }, stop: function () { journeyStatusModal(p, 'Stopped'); }, reactivate: function () { journeyStatusModal(p, 'Active'); },
-      complete: function () { completionModal(p); }, extend: function () { extendModal(p); }
+      complete: function () { completionModal(p); }, extend: function () { extendModal(p); }, calls: function () { openCallJourney(p.view.clientId); }
     };
     $$('[data-p]', m.el).forEach(function (b) { b.addEventListener('click', handlers[b.getAttribute('data-p')]); });
     bindProfileTab(p);
@@ -783,6 +827,13 @@
         }).join('') + '</tbody></table></div>';
     }
     if (tab === 'audit') return auditTable(p.audit || []);
+    if (tab === 'calls') {
+      var logs = (p.callLogs || []).slice().reverse();
+      if (!logs.length) return emptyState('No calls logged yet', '📞');
+      return '<div class="table-wrap"><table class="table"><thead><tr><th>When</th><th>Call</th><th>Agent</th><th>Result</th><th>Note</th></tr></thead><tbody>' + logs.map(function (l) {
+        return '<tr><td class="nowrap">' + fmtDateTime(l.Called_At) + '</td><td>' + callTypeBadge(l.Task_Type, l.Task_Label) + '</td><td>' + esc(l.Agent_Name) + '</td><td>' + (l.Connected === 'Yes' ? badge('Connected', 'green') : badge('Not connected', 'grey')) + '<div class="cell-sub">' + esc(l.Outcome) + (l.Feeling ? ' · feeling ' + esc(l.Feeling) : '') + (l.Callback_Date ? ' · callback ' + fmtDate(l.Callback_Date) : '') + (l.Refill_Amount ? ' · refill ' + money(l.Refill_Amount) : '') + '</div></td><td><i>' + esc(l.Note) + '</i></td></tr>';
+      }).join('') + '</tbody></table></div>';
+    }
     return '';
   }
 
@@ -980,8 +1031,13 @@
   function noteModal(p) {
     formModal({
       title: 'Add note', size: 'md', submitLabel: 'Add note', subtitle: esc(p.view.fullName),
-      body: field({ name: 'note', label: 'Note', type: 'textarea', required: true }) + (isAdmin() ? field({ name: 'internal', label: 'Internal admin note (hidden from partner)', type: 'checkbox' }) : ''),
-      onSubmit: function (d) { return api('notes.add', { clientId: p.view.clientId, note: d.note, internal: !!d.internal }).then(function () { afterChange('Note added'); }); }
+      body: field({ name: 'note', label: 'Note', type: 'textarea', required: true }) +
+        (isAgent() ? '<div class="alert alert-info">Agent notes are shared with the partner as <b>instructions from Justlife</b>. Call results go in “Log call” and stay internal.</div>' : '') +
+        (isAdmin() ? field({ name: 'instruction', label: 'Show to the partner as an instruction from Justlife', type: 'checkbox' }) + field({ name: 'internal', label: 'Internal admin note (hidden from partner)', type: 'checkbox' }) : ''),
+      onSubmit: function (d) {
+        if (d.internal && d.instruction) throw new Error('Choose either “instruction” or “internal”, not both');
+        return api('notes.add', { clientId: p.view.clientId, note: d.note, internal: !!d.internal, instruction: !!d.instruction }, { requestId: uuid() }).then(function () { afterChange('Note added'); });
+      }
     });
   }
 
@@ -1126,10 +1182,10 @@
     var when = kind === 'completed' ? 'Refilled ' + fmtDate(it.refillDate) + ' · ' + esc(it.timing)
       : 'Due ' + fmtDate(it.expectedDate) + (it.days < 0 ? ' · <b style="color:var(--red)">' + Math.abs(it.days) + 'd overdue</b>' : (it.days === 0 ? ' · <b>today</b>' : ' · in ' + it.days + 'd'));
     return '<div class="board-item"><div class="top"><div><a href="#" data-action="open-client" data-id="' + esc(it.clientId) + '" class="cell-title">' + esc(it.clientName) + '</a>' +
-      '<div class="cell-sub">' + esc(it.externalClientId) + (isAdmin() ? ' · ' + esc(it.companyName) : '') + (it.phone ? ' · ' + esc(it.phone) : '') + '</div></div><span class="count-pill">#' + esc(it.cycle) + '</span></div>' +
+      '<div class="cell-sub">' + esc(it.externalClientId) + (isStaff() ? ' · ' + esc(it.companyName) : '') + (it.phone ? ' · ' + esc(it.phone) : '') + '</div></div><span class="count-pill">#' + esc(it.cycle) + '</span></div>' +
       '<div class="small">' + when + (it.rescheduleCount ? ' · ' + badge('rescheduled ' + it.rescheduleCount + '×', 'orange') : '') + '</div>' +
       '<div class="cell-sub">' + esc(it.medicationName) + ' · ' + esc(it.dosage) + (kind === 'completed' && it.amount ? ' · ' + money(it.amount) + ' ' + esc(it.paymentStatus) : '') + '</div>' +
-      (kind !== 'completed' ? '<div class="row"><button class="btn btn-sm btn-success" data-action="record-refill" data-id="' + esc(it.clientId) + '">＋ Refill</button><button class="btn btn-sm" data-action="reschedule" data-id="' + esc(it.clientId) + '">📅 Reschedule</button></div>' : '') + '</div>';
+      (kind !== 'completed' ? '<div class="row"><button class="btn btn-sm btn-success" data-action="record-refill" data-id="' + esc(it.clientId) + '">＋ Refill</button><button class="btn btn-sm" data-action="reschedule" data-id="' + esc(it.clientId) + '">📅 Reschedule</button>' + waButton(it.phone, it.clientName, 'refill') + '</div>' : '') + '</div>';
   }
   function boardCol(title, cls, items, kind, empty) {
     return '<div class="card board-col ' + cls + '"><div class="card-head"><h2>' + esc(title) + '</h2><span class="count-pill">' + items.length + '</span></div><div class="board-list">' +
@@ -1368,6 +1424,264 @@
     if (!rows.length) return emptyState('No data');
     return '<div class="table-wrap"><table class="table"><thead><tr>' + head.map(function (h, i) { return '<th' + (i > 0 ? ' class="num"' : '') + '>' + esc(h) + '</th>'; }).join('') + '</tr></thead><tbody>' +
       rows.map(function (r) { return '<tr>' + r.map(function (c, i) { return '<td' + (i > 0 && typeof c === 'string' && /^[A-Z]{3} |^[\d,.]+%?$/.test(c) ? ' class="num"' : '') + '>' + c + '</td>'; }).join('') + '</tr>'; }).join('') + '</tbody></table></div>';
+  }
+
+  /* =========================================================================
+   * AGENT CALLING (admin + Justlife agents)
+   * ======================================================================= */
+  var CALL_TYPE_CLS = { WEEK: 'cl-week', REFILL: 'cl-refill', CALLBACK: 'cl-callback' };
+  var CALL_STATUS_CLS = { 'Completed': 'completed', 'Overdue': 'overdue', 'Due today': 'due-today', 'Upcoming': 'upcoming', 'Cancelled': 'cancelled' };
+  function callTypeBadge(type, label) {
+    var cls = CALL_TYPE_CLS[type] || 'cl-week';
+    if (type === 'WEEK' && /Week 2/.test(label)) cls = 'cl-week2';
+    return '<span class="badge plain ' + cls + '">' + esc(label) + '</span>';
+  }
+  function callResult(l) {
+    if (!l) return '';
+    return esc(l.Agent_Name || l.lastBy) + ' · ' + (l.Connected === 'Yes' ? 'connected' : 'not connected') + ' · ' + esc(l.Outcome) +
+      (l.Feeling ? ' · feeling ' + esc(l.Feeling) : '') + (l.Callback_Date ? ' · callback ' + fmtDate(l.Callback_Date) : '') + (Number(l.Refill_Amount) ? ' · refill ' + money(l.Refill_Amount) : '');
+  }
+  function agentOptions(withUnassigned) {
+    var o = (state.meta.agents || []).filter(function (g) { return g.status === 'Active'; }).map(function (g) { return { value: g.id, label: g.name }; });
+    if (withUnassigned) o.push({ value: 'unassigned', label: 'Unassigned' });
+    return o;
+  }
+
+  function viewCalling(root) {
+    var tab = state.params.tab || 'list';
+    var tabs = [['list', '📞 Call list'], ['performance', '📈 Agent performance']];
+    if (isAdmin()) tabs.push(['agents', '🎧 Agents']);
+    setHeader('Agent calling', isAgent() ? 'Your client calls – wellbeing check-ins and refill reminders' : 'Justlife agents call every client: week-1/2 check-ins, refill calls and callbacks');
+    root.innerHTML = '<div class="card"><div class="tabs" style="padding:0 12px">' + tabs.map(function (t) { return '<button class="tab ' + (t[0] === tab ? 'active' : '') + '" data-ctab="' + t[0] + '">' + t[1] + '</button>'; }).join('') + '</div></div><div id="calling-body"></div>';
+    $$('[data-ctab]', root).forEach(function (b) { b.onclick = function () { go('calling', { tab: b.getAttribute('data-ctab') }); }; });
+    var body = $('#calling-body');
+    if (tab === 'performance') return callingPerformance(body);
+    if (tab === 'agents' && isAdmin()) return callingAgents(body);
+    callingList(body);
+  }
+
+  function callingList(body) {
+    var p = state.params;
+    var companies = (state.meta.companies || []).map(function (c) { return { value: c.id, label: c.name }; });
+    var defAgent = p.agentId !== undefined ? p.agentId : (state.user.agentId || '');
+    body.innerHTML = '<div class="stack"><div id="call-kpis">' + skeleton(1) + '</div><div class="card"><div class="card-body"><form class="toolbar" id="call-filters">' +
+      field({ name: 'preset', label: 'Period', type: 'select', value: p.preset || 'today', options: [{ value: 'today', label: 'Today' }, { value: 'this_week', label: 'This week' }, { value: 'last_week', label: 'Last week' }, { value: 'this_month', label: 'This month' }, { value: 'last_month', label: 'Last month' }, { value: 'custom', label: 'Custom range' }, { value: 'all', label: 'All time' }], noPlaceholder: true, required: true }) +
+      field({ name: 'from', label: 'From date', type: 'date', value: p.from }) + field({ name: 'to', label: 'To date', type: 'date', value: p.to }) +
+      field({ name: 'dateField', label: 'Date applies to', type: 'select', required: true, noPlaceholder: true, value: p.dateField || 'due', options: [{ value: 'due', label: 'Call due date' }, { value: 'called', label: 'Call logged date' }] }) +
+      field({ name: 'agentId', label: 'Agent', type: 'select', options: agentOptions(isAdmin()), value: defAgent, placeholder: 'All agents' }) +
+      field({ name: 'companyId', label: 'Partner', type: 'select', options: companies, value: p.companyId, placeholder: 'All partners' }) +
+      field({ name: 'type', label: 'Call type', type: 'select', options: [{ value: 'WEEK', label: 'Week check-in calls' }, { value: 'REFILL', label: 'Refill calls' }, { value: 'CALLBACK', label: 'Callbacks' }], value: p.type, placeholder: 'All calls' }) +
+      field({ name: 'status', label: 'Status', type: 'select', options: [{ value: 'Pending', label: 'Pending (today + overdue)' }, { value: 'Due today', label: 'Due today' }, { value: 'Overdue', label: 'Overdue' }, { value: 'Upcoming', label: 'Upcoming' }, { value: 'Completed', label: 'Completed' }], value: p.status, placeholder: 'All statuses' }) +
+      field({ name: 'connection', label: 'Connection', type: 'select', options: [{ value: 'connected', label: 'Connected' }, { value: 'not_connected', label: 'Not connected' }], value: p.connection, placeholder: 'Any' }) +
+      field({ name: 'q', label: 'Search', placeholder: 'Ref ID, name, or mobile', value: p.q, attrs: ' type="search"' }).replace('class="field', 'class="field search') +
+      '<button type="button" class="btn" data-clear>Clear filters</button><span class="muted small grow right" id="call-count"></span></form></div></div>' +
+      '<div class="card"><div class="card-body flush" id="call-table">' + skeleton(1) + '</div></div></div>';
+    var form = $('#call-filters');
+    var load = function () {
+      var f = readForm(form);
+      form.from.disabled = form.to.disabled = f.preset !== 'custom';
+      if (f.preset === 'custom' && (!f.from || !f.to)) { $('#call-table').innerHTML = '<div class="card-body"><div class="alert alert-info">Choose a from and to date.</div></div>'; return; }
+      api('calling.list', f).then(function (r) {
+        if (!$('#call-table')) return;
+        if (f.preset !== 'custom') { form.from.value = r.from || ''; form.to.value = r.to || ''; }
+        var s = r.summary;
+        $('#call-kpis').innerHTML = '<div class="kpis">' + kpi("Today's calls", num(s.today), 'navy', 'Due today') + kpi('Pending today', num(s.pendingToday), 'orange', 'Due today, not called yet') +
+          kpi('Overdue', num(s.overdue), 'red', 'Past due, not called') + kpi('Upcoming', num(s.upcoming), '', 'Next 7 days') + kpi('Completed today', num(s.completedToday), 'green', 'Calls logged today') +
+          kpi('Refill calls today', num(s.refillCallsToday), 'purple') + (isAdmin() && s.unassignedClients ? kpi('Unassigned clients', num(s.unassignedClients), 'grey', 'Assign them in the Agents tab') : '') + '</div>' +
+          (r.agents.length && !isAgent() ? '<div class="card" style="margin-top:16px"><div class="card-head"><h2>Agents today</h2><span class="muted small">Click an agent to filter</span></div><div class="card-body flush"><div class="table-wrap"><table class="table"><thead><tr><th>Agent</th><th class="num">Clients</th><th class="num">Today</th><th class="num">Pending today</th><th class="num">Overdue</th><th class="num">Upcoming 7d</th><th class="num">Completed today</th></tr></thead><tbody>' +
+            r.agents.map(function (g) { return '<tr class="clickable" data-pick-agent="' + esc(g.agentId) + '"><td class="strong">' + esc(g.name) + '</td><td class="num">' + num(g.clients) + '</td><td class="num">' + num(g.today) + '</td><td class="num">' + num(g.pendingToday) + '</td><td class="num">' + (g.overdue ? '<b style="color:var(--red)">' + num(g.overdue) + '</b>' : 0) + '</td><td class="num">' + num(g.upcoming) + '</td><td class="num">' + num(g.completedToday) + '</td></tr>'; }).join('') + '</tbody></table></div></div></div>' : '');
+        $$('[data-pick-agent]').forEach(function (tr) { tr.onclick = function () { form.agentId.value = tr.getAttribute('data-pick-agent'); load(); }; });
+        $('#call-count').textContent = r.total + ' row(s) in view';
+        $('#call-table').innerHTML = r.rows.length ? '<div class="table-wrap"><table class="table"><thead><tr><th>Due</th><th>Call</th><th>Client</th><th>Partner</th><th>Agent</th><th>Last result</th><th></th></tr></thead><tbody>' +
+          r.rows.map(function (x) {
+            var last = x.lastOutcome ? '<div class="small">' + esc(x.lastBy) + ' · ' + (x.lastConnected === 'Yes' ? 'connected' : 'not connected') + ' · ' + esc(x.lastOutcome) + '</div><div class="cell-sub"><i>' + esc(String(x.lastNote || '').slice(0, 70)) + (String(x.lastNote || '').length > 70 ? '…' : '') + '</i></div>' : (x.doneByRecord ? '<span class="cell-sub">Refill recorded</span>' : '<span class="cell-sub">—</span>');
+            return '<tr class="clickable" data-action="call-journey" data-id="' + esc(x.clientId) + '"><td class="nowrap">' + fmtDate(x.dueDate) + '</td><td>' + callTypeBadge(x.type, x.label) + '<div style="margin-top:4px">' + badge(x.status, CALL_STATUS_CLS[x.status]) + '</div></td>' +
+              '<td><div class="cell-title">' + esc(x.clientName) + '</div><div class="cell-sub">' + esc(x.bookingRef) + ' · ' + esc(x.phone) + '</div></td><td>' + esc(x.companyName) + '</td><td>' + esc(x.agentName) + '</td><td>' + last + '</td>' +
+              '<td class="nowrap">' + waButton(x.phone, x.clientName, x.type === 'REFILL' ? 'refill' : 'week') + ' <button class="btn btn-sm" data-action="log-call" data-id="' + esc(x.clientId) + '" data-key="' + esc(x.key) + '">' + (x.status === 'Completed' ? '＋ Add call' : 'Log call') + '</button></td></tr>';
+          }).join('') + '</tbody></table></div>' : emptyState('No calls for these filters', '📞');
+      }).catch(function (e) { $('#call-table').innerHTML = errorBlock(e); });
+    };
+    form.addEventListener('change', load);
+    form.addEventListener('input', debounce(function (e) { if (e.target.name === 'q') load(); }, 400));
+    $('[data-clear]', form).onclick = function () { form.preset.value = 'today'; ['dateField'].forEach(function (n) { form[n].value = 'due'; }); ['agentId', 'companyId', 'type', 'status', 'connection', 'q', 'from', 'to'].forEach(function (n) { form[n].value = ''; }); if (isAgent()) form.agentId.value = state.user.agentId; load(); };
+    state.reloadCalls = load;
+    load();
+  }
+
+  var activeCallJourney = null;
+  function openCallJourney(clientId) {
+    var m = modal({ title: 'Call journey', subtitle: 'Full journey since day one', size: 'lg', body: skeleton(2), noAutofocus: true, onClose: function () { activeCallJourney = null; } });
+    activeCallJourney = { id: clientId, modal: m };
+    loadCallJourney();
+  }
+  function loadCallJourney() {
+    var cj = activeCallJourney; if (!cj) return;
+    api('calling.journey', { clientId: cj.id }).then(function (d) { if (activeCallJourney === cj) renderCallJourney(d); }).catch(function (e) { cj.modal.body(errorBlock(e)); });
+  }
+  function afterCallChange(msg) { if (msg) toast(msg, 'success'); loadCallJourney(); if (state.reloadCalls && state.view === 'calling') state.reloadCalls(); refreshCounts(); }
+  function renderCallJourney(d) {
+    var m = activeCallJourney.modal, v = d.view, j = v.journey, s = d.stats, cur = d.currency;
+    $('.modal-head h2', m.el).textContent = v.fullName;
+    var nextOpen = d.tasks.filter(function (t) { return t.status === 'Overdue' || t.status === 'Due today' || t.status === 'Upcoming'; })[0];
+    var last = d.lastCall;
+    var html = '<div class="jsum"><div><b class="jname">' + esc(v.fullName) + '</b> <span class="muted small">' + esc(v.firstBookingRef) + ' · ' + esc(v.phone) + ' · ' + esc(v.companyName) + '</span></div>' +
+      '<div class="muted small">Started ' + fmtDate(j.startDate) + ' · ' + j.months + '-month plan to ' + fmtDate(j.endDate) + ' · now in month ' + j.currentMonth + ' of ' + j.months + ' · ' + esc(d.agent ? d.agent.name : 'Unassigned') + ' · ' + statusBadge(j) + '</div>' +
+      '<div class="jstats">' + [[s.calls, 'calls made'], [s.connected, 'connected'], [s.refills, 'refills'], [money(s.startingAmount, cur), 'starting amount'], [money(s.refillValue, cur), 'refill value'], [money(s.totalCollected, cur), 'total collected']].map(function (x) { return '<div><b>' + x[0] + '</b><span>' + x[1] + '</span></div>'; }).join('') + '</div>' +
+      (last ? '<div class="lastcall"><div class="lc-head">LAST CALL — ' + fmtDateTime(last.Called_At).toUpperCase() + ' · ' + esc(last.Agent_Name).toUpperCase() + '</div>' + esc(last.Outcome) + ' — <i>' + esc(last.Note) + '</i></div>' : '') + '</div>' +
+      '<div class="profile-actions">' + (nextOpen ? '<button class="btn btn-primary" data-cj="log">📞 Log call · ' + esc(nextOpen.label) + '</button>' + waButton(v.phone, v.fullName, nextOpen.type === 'REFILL' ? 'refill' : 'week') : '<button class="btn btn-primary" data-cj="log">📞 Log call</button>') +
+      (j.nextScheduleId && ['Active', 'Overdue', 'Not Started'].indexOf(j.status) >= 0 ? '<button class="btn btn-success" data-cj="refill">＋ Record refill</button>' : '') +
+      (j.nextScheduleId && ['Stopped', 'Completed'].indexOf(j.status) < 0 ? '<button class="btn" data-cj="reschedule">📅 Reschedule refill</button>' : '') +
+      (j.status !== 'Stopped' ? '<button class="btn" data-cj="extend">⏩ Extend journey</button>' : '') +
+      '<button class="btn" data-cj="note">📝 Note for partner</button><button class="btn" data-cj="profile">👤 Full profile</button>' +
+      (isAdmin() ? '<button class="btn" data-cj="reassign">🔁 Reassign agent</button>' : '') + '</div>';
+    var partnerNotes = d.notes.filter(function (n) { return n.Note_Type !== 'AGENT' && n.Note_Type !== 'INTERNAL'; }).slice(0, 3);
+    var agentNotes = d.notes.filter(function (n) { return n.Note_Type === 'AGENT' || n.Note_Type === 'INTERNAL'; }).slice(0, 3);
+    if (partnerNotes.length || agentNotes.length) {
+      html += '<div class="grid-2">' + '<div><h4 style="margin-bottom:6px">Notes from partner</h4>' + (partnerNotes.map(function (n) { return '<div class="note-card"><div class="meta">' + esc(n.Note_Type.replace(/_/g, ' ')) + ' · ' + esc(n.Created_By_Name) + ' · ' + fmtDateTime(n.Created_At) + '</div><div class="body">' + esc(n.Note) + '</div></div>'; }).join('') || '<div class="muted small">None</div>') + '</div>' +
+        '<div><h4 style="margin-bottom:6px">Justlife notes / instructions</h4>' + (agentNotes.map(function (n) { return '<div class="note-card ' + (n.Note_Type === 'INTERNAL' ? 'internal' : '') + '"><div class="meta">' + (n.Note_Type === 'INTERNAL' ? 'Internal' : 'Shared with partner') + ' · ' + esc(n.Created_By_Name) + ' · ' + fmtDateTime(n.Created_At) + '</div><div class="body">' + esc(n.Note) + '</div></div>'; }).join('') || '<div class="muted small">None</div>') + '</div></div>';
+    }
+    html += '<ul class="timeline calltl">' + d.tasks.filter(function (t) { return t.status !== 'Cancelled' || t.logs.length; }).map(function (t) {
+      return '<li class="ct-' + esc(t.type.toLowerCase()) + ' st-' + esc(slug(t.status)) + '"><span class="dot"></span><div class="row" style="gap:8px">' + callTypeBadge(t.type, t.label) + badge(t.status, CALL_STATUS_CLS[t.status]) + '<span class="muted small">' + fmtDate(t.dueDate) + '</span>' +
+        (t.status !== 'Completed' && t.status !== 'Cancelled' ? '<button class="btn btn-sm" data-cj-log="' + esc(t.key) + '">Log call</button>' : '') + '</div>' +
+        (t.logs.length ? t.logs.map(function (l) { return '<div class="detail muted" style="margin-top:4px">' + callResult(l) + ' · ' + fmtDateTime(l.Called_At) + '</div><div class="detail"><i>“' + esc(l.Note) + '”</i></div>'; }).join('') : (t.doneByRecord ? '<div class="detail muted">Refill recorded – no call needed</div>' : '')) + '</li>';
+    }).join('') + '</ul>';
+    m.body(html);
+    var c = { clientId: v.clientId };
+    var on = function (k, fn) { var b = $('[data-cj="' + k + '"]', m.el); if (b) b.onclick = fn; };
+    on('log', function () { logCallModal(v.clientId, nextOpen ? nextOpen.key : '', d); });
+    on('refill', function () { withClient(v.clientId, function (p) { refillModal(p); }); });
+    on('reschedule', function () { withClient(v.clientId, rescheduleModal); });
+    on('extend', function () { withClient(v.clientId, extendModal); });
+    on('note', function () { withClient(v.clientId, noteModal); });
+    on('profile', function () { openClientProfile(v.clientId); });
+    on('reassign', function () {
+      formModal({ title: 'Reassign agent', size: 'sm', submitLabel: 'Reassign', subtitle: esc(v.fullName),
+        body: field({ name: 'agentId', label: 'Agent', type: 'select', required: true, options: agentOptions(false), value: d.agent ? d.agent.id : '' }),
+        onSubmit: function (f) { return api('calling.reassign', { clientId: v.clientId, agentId: f.agentId }, { requestId: uuid() }).then(function () { afterCallChange('Agent reassigned'); }); } });
+    });
+    $$('[data-cj-log]', m.el).forEach(function (b) { b.onclick = function () { logCallModal(v.clientId, b.getAttribute('data-cj-log'), d); }; });
+  }
+
+  function logCallModal(clientId, taskKey, journey) {
+    var start = journey ? Promise.resolve(journey) : api('calling.journey', { clientId: clientId });
+    start.then(function (d) {
+      var outcomes = state.meta.callOutcomes || { connected: [], notConnected: [] };
+      var tasks = d.tasks.filter(function (t) { return t.status !== 'Cancelled'; });
+      var opts2 = tasks.map(function (t) { return { value: t.key, label: t.label + ' · ' + fmtDate(t.dueDate) + ' · ' + t.status }; });
+      var def = taskKey || (tasks.filter(function (t) { return t.status !== 'Completed'; })[0] || {}).key;
+      formModal({
+        title: 'Log call', size: 'md', submitLabel: 'Save call', subtitle: esc(d.view.fullName) + ' · ' + esc(d.view.phone),
+        body: '<div class="row">' + waButton(d.view.phone, d.view.fullName, 'week') + waButton(d.view.phone, d.view.fullName, 'refill') + '<span class="muted small">Left: wellbeing check-in · Right: refill reminder</span></div>' +
+          '<div class="form-grid">' +
+          field({ name: 'taskKey', label: 'Call', type: 'select', required: true, options: opts2, value: def, full: true }) +
+          field({ name: 'connected', label: 'Connected?', type: 'select', required: true, options: [{ value: 'Yes', label: 'Yes – spoke to client' }, { value: 'No', label: 'No – not connected' }] }) +
+          field({ name: 'outcome', label: 'Outcome', type: 'select', required: true, options: [] }) +
+          field({ name: 'feeling', label: 'How is the client feeling?', type: 'select', options: state.meta.feelings || [] }) +
+          field({ name: 'callbackDate', label: 'Callback date', type: 'date', min: todayStr(), hint: 'Creates a callback task' }) +
+          field({ name: 'refillAmount', label: 'Refill amount (' + currency() + ')', type: 'number', min: 0, step: '0.01', hint: 'For “Refill Converted”' }) +
+          field({ name: 'note', label: 'Call note (mandatory)', type: 'textarea', required: true, full: true }) + '</div>' +
+          '<div class="alert alert-info small">Call notes are visible to Justlife only. To leave an instruction for the partner, use “Note for partner”.</div>',
+        onMount: function (h, form) {
+          var sync = function () {
+            var yes = form.connected.value === 'Yes';
+            var list = form.connected.value ? (yes ? outcomes.connected : outcomes.notConnected) : [];
+            var keep = form.outcome.value;
+            form.outcome.innerHTML = opts(list, list.indexOf(keep) >= 0 ? keep : '', form.connected.value ? 'Select…' : 'Choose “Connected?” first');
+            form.feeling.disabled = !yes; if (!yes) form.feeling.value = '';
+            var conv = form.outcome.value === 'Refill Converted';
+            form.refillAmount.disabled = !conv; if (!conv) form.refillAmount.value = '';
+          };
+          form.connected.addEventListener('change', sync); form.outcome.addEventListener('change', sync); sync();
+        },
+        onSubmit: function (f, rid) {
+          f.clientId = clientId;
+          return api('calling.log', f, { requestId: rid }).then(function () {
+            afterCallChange('Call saved' + (f.callbackDate ? ' · callback ' + fmtDate(f.callbackDate) : ''));
+            var openRefill = d.view.journey.nextScheduleId && ['Active', 'Overdue', 'Not Started'].indexOf(d.view.journey.status) >= 0;
+            if (f.outcome === 'Refill Converted' && openRefill) {
+              confirmBox({ title: 'Record the refill now?', message: 'The client confirmed the refill. Record it now so the partner and the refill schedule update everywhere.', confirmLabel: 'Record refill' })
+                .then(function (yes) { if (yes) withClient(clientId, refillModal); });
+            }
+          });
+        }
+      });
+    }).catch(function (e) { toast(e.message, 'error'); });
+  }
+
+  function callingPerformance(body) {
+    var p = state.params;
+    var companies = (state.meta.companies || []).map(function (c) { return { value: c.id, label: c.name }; });
+    body.innerHTML = '<div class="stack"><div class="card"><div class="card-body"><form class="toolbar" id="perf-call-filters">' +
+      field({ name: 'preset', label: 'Period', type: 'select', required: true, noPlaceholder: true, value: 'this_month', options: [{ value: 'today', label: 'Today' }, { value: 'this_week', label: 'This week' }, { value: 'last_week', label: 'Last week' }, { value: 'this_month', label: 'This month' }, { value: 'last_month', label: 'Last month' }, { value: 'custom', label: 'Custom range' }, { value: 'all', label: 'All time' }] }) +
+      field({ name: 'from', label: 'From date', type: 'date' }) + field({ name: 'to', label: 'To date', type: 'date' }) +
+      field({ name: 'agentId', label: 'Agent', type: 'select', options: agentOptions(false), placeholder: 'All agents' }) +
+      field({ name: 'companyId', label: 'Partner', type: 'select', options: companies, placeholder: 'All partners' }) + '</form></div></div><div id="perf-call-body">' + skeleton(3) + '</div></div>';
+    var form = $('#perf-call-filters');
+    var load = function () {
+      destroyCharts();
+      var f = readForm(form);
+      form.from.disabled = form.to.disabled = f.preset !== 'custom';
+      if (f.preset === 'custom' && (!f.from || !f.to)) { $('#perf-call-body').innerHTML = '<div class="alert alert-info">Choose a from and to date.</div>'; return; }
+      api('calling.performance', f).then(function (r) {
+        if (f.preset !== 'custom') { form.from.value = r.from || ''; form.to.value = r.to || ''; }
+        var A = r.agents, cur = r.currency, tot = function (k) { return A.reduce(function (s, x) { return s + (x[k] || 0); }, 0); };
+        $('#perf-call-body').innerHTML = '<div class="stack"><div class="kpis">' + kpi('Calls logged', num(tot('calls')), 'navy') + kpi('Connected', num(tot('connected')), 'green', tot('calls') ? Math.round(tot('connected') / tot('calls') * 100) + '% connect rate' : '') +
+          kpi('Calls due (to date)', num(tot('due')), '', num(tot('dueDone')) + ' done') + kpi('Overdue now', num(tot('overdueNow')), 'red') +
+          kpi('Refills converted on calls', num(tot('converted')), 'purple', money(tot('convertedAmount'), cur)) + kpi('Refills recorded by agents', num(tot('refillsRecorded')), 'purple', money(tot('refillsRecordedAmount'), cur)) + '</div>' +
+          '<div class="card"><div class="card-head"><h2>Agent performance</h2><span class="muted small">' + (r.from ? fmtDate(r.from) + ' → ' + fmtDate(r.to) : 'All time') + '</span></div><div class="card-body flush"><div class="table-wrap"><table class="table"><thead><tr>' +
+          '<th>Agent</th><th class="num">Clients</th><th class="num">Calls due</th><th class="num">Done</th><th class="num">Completion</th><th class="num">Calls logged</th><th class="num">Connected</th><th class="num">Connect rate</th><th class="num">Clients called</th><th class="num">Refills converted</th><th class="num">Refills recorded</th><th class="num">Extensions</th><th class="num">Overdue now</th><th class="num">Pending today</th></tr></thead><tbody>' +
+          (A.length ? A.map(function (x) {
+            return '<tr><td><div class="cell-title">' + esc(x.name) + (x.status !== 'Active' ? ' ' + badge('Inactive', 'grey') : '') + '</div><div class="cell-sub">' + esc(x.email) + '</div></td><td class="num">' + num(x.activeClients) + ' / ' + num(x.clients) + '</td><td class="num">' + num(x.due) + '</td><td class="num">' + num(x.dueDone) + '</td><td class="num">' + pct(x.completionRate) + '</td>' +
+              '<td class="num strong">' + num(x.calls) + '</td><td class="num">' + num(x.connected) + '</td><td class="num">' + pct(x.connectRate) + '</td><td class="num">' + num(x.clientsCalled) + '</td>' +
+              '<td class="num">' + num(x.converted) + '<div class="cell-sub">' + money(x.convertedAmount, cur) + '</div></td><td class="num">' + num(x.refillsRecorded) + '<div class="cell-sub">' + money(x.refillsRecordedAmount, cur) + '</div></td><td class="num">' + num(x.extensions) + '</td>' +
+              '<td class="num">' + (x.overdueNow ? '<b style="color:var(--red)">' + num(x.overdueNow) + '</b>' : 0) + '</td><td class="num">' + num(x.pendingToday) + '</td></tr>';
+          }).join('') : '<tr><td colspan="14">' + emptyState('No agents yet') + '</td></tr>') + '</tbody></table></div></div></div>' +
+          '<div class="grid-2">' + chartBox('ch-agent-calls', 'Calls by agent', 'Logged vs connected') + chartBox('ch-agent-refills', 'Refill value by agent', 'Converted on calls vs recorded') + '</div></div>';
+        var names = A.map(function (x) { return x.name; });
+        makeChart('ch-agent-calls', 'bar', names, [{ label: 'Calls logged', data: A.map(function (x) { return x.calls; }), color: PALETTE[0] }, { label: 'Connected', data: A.map(function (x) { return x.connected; }), color: PALETTE[3] }, { label: 'Calls due', data: A.map(function (x) { return x.due; }), color: PALETTE[2] }]);
+        makeChart('ch-agent-refills', 'bar', names, [{ label: 'Converted on calls', data: A.map(function (x) { return x.convertedAmount; }), color: PALETTE[5] }, { label: 'Refills recorded', data: A.map(function (x) { return x.refillsRecordedAmount; }), color: PALETTE[1] }], { money: true });
+      }).catch(function (e) { $('#perf-call-body').innerHTML = errorBlock(e); });
+    };
+    form.addEventListener('change', load);
+    load();
+  }
+
+  function callingAgents(body) {
+    body.innerHTML = skeleton(2);
+    api('agents.list').then(function (r) {
+      body.innerHTML = '<div class="stack"><div class="alert alert-info">Agents sign in on this admin page with <b>Sign in with Google</b> using their @justlife.com account and only see Agent Calling. New clients are assigned in rotation (agent 1 → 2 → 3 → 1…). Next in rotation: <b>' + esc(r.nextInRotation || '—') + '</b>. If someone is also an active Admin, they sign in as Admin and can still filter their own calls.</div>' +
+        '<div class="card"><div class="card-head"><h2>Agents</h2><button class="btn btn-sm" data-assign-all>🔁 Assign unassigned clients</button><button class="btn btn-sm btn-primary" data-add-agent>＋ Add agent</button></div><div class="card-body flush">' +
+        (r.agents.length ? '<div class="table-wrap"><table class="table"><thead><tr><th>#</th><th>Agent</th><th>Status</th><th class="num">Assigned clients</th><th>Last sign-in</th><th></th></tr></thead><tbody>' + r.agents.map(function (g, i) {
+          return '<tr><td>' + (i + 1) + '</td><td><div class="cell-title">' + esc(g.Full_Name) + '</div><div class="cell-sub">' + esc(g.Email) + (g.Phone ? ' · ' + esc(g.Phone) : '') + '</div></td><td>' + badge(g.Status, g.Status === 'Active' ? 'green' : 'grey') + '</td><td class="num">' + num(g.clientCount) + '</td><td class="nowrap">' + fmtDateTime(g.Last_Login_At) + '</td>' +
+            '<td class="nowrap"><button class="btn btn-sm" data-ag-edit="' + esc(g.Agent_ID) + '">Edit</button> <button class="btn btn-sm ' + (g.Status === 'Active' ? 'btn-danger' : 'btn-success') + '" data-ag-status="' + esc(g.Agent_ID) + '">' + (g.Status === 'Active' ? 'Deactivate' : 'Activate') + '</button></td></tr>';
+        }).join('') + '</tbody></table></div>' : emptyState('No agents yet – add your first agent', '🎧')) + '</div></div></div>';
+      var find = function (id) { return r.agents.filter(function (g) { return g.Agent_ID === id; })[0]; };
+      var reload = function () { reloadMeta().then(function () { callingAgents(body); }); };
+      $('[data-add-agent]', body).onclick = function () { agentModal(null, reload); };
+      $$('[data-ag-edit]', body).forEach(function (b) { b.onclick = function () { agentModal(find(b.getAttribute('data-ag-edit')), reload); }; });
+      $$('[data-ag-status]', body).forEach(function (b) {
+        b.onclick = function () {
+          var g = find(b.getAttribute('data-ag-status')), to = g.Status === 'Active' ? 'Inactive' : 'Active';
+          confirmBox({ title: (to === 'Active' ? 'Activate ' : 'Deactivate ') + g.Full_Name, message: to === 'Inactive' ? 'They are signed out, skipped in the rotation, and their clients stay assigned until you reassign them (“Assign unassigned clients” can move them).' : 'They will be included in the rotation again.', danger: to === 'Inactive', confirmLabel: to === 'Active' ? 'Activate' : 'Deactivate' })
+            .then(function (ok) { if (ok) return api('agents.setStatus', { agentId: g.Agent_ID, status: to }, { requestId: uuid() }).then(function () { toast('Agent updated', 'success'); reload(); }); })
+            .catch(function (e) { toast(e.message, 'error'); });
+        };
+      });
+      $('[data-assign-all]', body).onclick = function () {
+        formModal({ title: 'Assign clients to agents', size: 'sm', submitLabel: 'Assign now',
+          body: '<p>Clients without an agent are shared out in rotation between the active agents.</p>' + field({ name: 'includeInactiveAgents', label: 'Also move clients of deactivated agents', type: 'checkbox' }),
+          onSubmit: function (f) { return api('calling.assignUnassigned', { includeInactiveAgents: !!f.includeInactiveAgents }, { requestId: uuid() }).then(function (x) { toast(x.assigned + ' client(s) assigned', 'success'); reload(); }); } });
+      };
+    }).catch(function (e) { body.innerHTML = errorBlock(e); });
+  }
+  function agentModal(g, done) {
+    g = g || {};
+    formModal({
+      title: g.Agent_ID ? 'Edit agent' : 'Add agent', size: 'sm', submitLabel: g.Agent_ID ? 'Save' : 'Add agent',
+      body: field({ name: 'email', label: 'Justlife Google email', type: 'email', required: !g.Agent_ID, readonly: !!g.Agent_ID, value: g.Email, placeholder: 'name@justlife.com' }) +
+        field({ name: 'fullName', label: 'Full name', required: true, value: g.Full_Name }) + field({ name: 'phone', label: 'Phone (optional)', type: 'tel', value: g.Phone }),
+      onSubmit: function (d) { d.agentId = g.Agent_ID || ''; return api('agents.save', d, { requestId: uuid() }).then(function () { toast(g.Agent_ID ? 'Agent updated' : 'Agent added – they can now sign in with Google', 'success'); done(); }); }
+    });
   }
 
   /* ---------- Upsell creation worklist ---------- */
@@ -1675,7 +1989,8 @@
     }).catch(function (e) { root.innerHTML = errorBlock(e); });
   }
 
-  VIEWS.admin = { dashboard: adminDashboard, clients: viewClients, refills: viewRefills, payments: adminPayments, upsell: adminUpsell, companies: adminCompanies, admins: adminUsers, audit: adminAudit, settings: adminSettings };
+  VIEWS.admin = { dashboard: adminDashboard, clients: viewClients, refills: viewRefills, payments: adminPayments, upsell: adminUpsell, calling: viewCalling, companies: adminCompanies, admins: adminUsers, audit: adminAudit, settings: adminSettings };
+  VIEWS.agent = { calling: viewCalling };
   VIEWS.partner = { dashboard: partnerDashboard, clients: viewClients, refills: viewRefills, notifications: partnerNotifications, account: partnerAccount };
 
   /* ===========================================================================
