@@ -362,3 +362,5 @@ dl { margin: 0; }
 button.is-busy::after, a.btn.is-busy::after { content: ''; width: 12px; height: 12px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: spin .7s linear infinite; display: inline-block; margin-left: 6px; }
 body.is-loading { cursor: progress; }
 .ref-id { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; font-weight: 700; color: var(--blue-600); }
+
+.cl-lead { background: #EDE9FE; color: #6D28D9; border-color: #DDD6FE; }

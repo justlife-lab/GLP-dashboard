@@ -78,13 +78,14 @@
   function waText(name, kind) {
     var first = String(name || '').trim().split(/\s+/)[0] || 'there';
     first = first.charAt(0).toUpperCase() + first.slice(1);
+    if (kind === 'lead') return 'Hi ' + first + ', this is Justlife.\nThank you for visiting us for your consultation. We wanted to check whether you have any questions about starting your treatment.\nIf you would like to go ahead, or speak with a doctor again, just reply to this message and we will arrange everything for you.\n\nJustlife Team';
     if (kind === 'refill') return 'Hi ' + first + ', this is Justlife.\nJust a quick reminder that your upcoming medication refill is due soon. If you’d like assistance arranging your next delivery, please reply to this message.\n\nThank you,\nJustlife';
     return 'Hi ' + first + ', this is Justlife.\nWe hope you’re doing well with your treatment. We just wanted to check in and see how things are going.\nIf you have any concerns about your treatment, are experiencing any health issues, or would like to speak with a doctor, please let us know. We can arrange a free consultation with a doctor to discuss your concerns.\nYour wellbeing is important to us.\nJustlife Team';
   }
   function waButton(phone, name, kind, extraCls) {
     var n = waNumber(phone);
     if (!n) return '';
-    return '<a class="btn btn-sm btn-wa ' + (extraCls || '') + '" data-action="wa" target="_blank" rel="noopener" title="Send ' + (kind === 'refill' ? 'refill reminder' : 'wellbeing check-in') + ' on WhatsApp" href="https://wa.me/' + esc(n) + '?text=' + encodeURIComponent(waText(name, kind)) + '">WhatsApp</a>';
+    return '<a class="btn btn-sm btn-wa ' + (extraCls || '') + '" data-action="wa" target="_blank" rel="noopener" title="Send ' + (kind === 'refill' ? 'refill reminder' : (kind === 'lead' ? 'consultation follow-up' : 'wellbeing check-in')) + ' on WhatsApp" href="https://wa.me/' + esc(n) + '?text=' + encodeURIComponent(waText(name, kind)) + '">WhatsApp</a>';
   }
 
   /* ===========================================================================
@@ -287,6 +288,7 @@
    * ========================================================================= */
   function badge(text, cls) { return '<span class="badge b-' + esc(cls || slug(text)) + '">' + esc(text) + '</span>'; }
   function statusBadge(j) {
+    if (j.status === 'Lead') return badge('Consultation only', 'lead');
     var h = badge(j.status);
     if (j.awaitingReview) h += ' ' + badge('Review', 'review');
     return h;
@@ -300,7 +302,7 @@
   }
   var SEG_LABEL = { done: 'Completed', current: 'Current month (supplied)', supplied: 'Supplied in advance', next: 'Next refill', due: 'Refill due', missed: 'Overdue – not supplied', stopped: 'Stopped', paused: 'Paused', future: 'Upcoming' };
   function journeyBar(j, large) {
-    if (j.status === 'Lead') return '<span class="badge b-lead">Lead · journey not started</span>';
+    if (j.status === 'Lead') return '<span class="badge b-lead">Consultation done · awaiting payment</span>';
     var segs = j.segments.map(function (s, i) { return '<span class="seg seg-' + esc(s) + '" title="Month ' + (i + 1) + ': ' + esc(SEG_LABEL[s] || s) + '"></span>'; }).join('');
     var meta = j.status === 'Not Started' ? 'Starts ' + fmtDate(j.startDate) : 'Month <strong>' + j.currentMonth + '</strong>/' + j.months;
     var html = '<div class="journey ' + (large ? 'journey-lg' : '') + '" role="img" aria-label="Journey ' + j.percent + '% complete, ' + esc(j.status) + '">' +
@@ -680,7 +682,7 @@
   /* ===========================================================================
    * 7. CLIENT LIST (shared Admin + Partner)
    * ========================================================================= */
-  var STATUS_OPTIONS = ['Lead', 'Not Started', 'Active', 'Paused', 'Overdue', 'Stopped', 'Completed'];
+  var STATUS_OPTIONS = [{ value: 'Lead', label: 'Consultation only (not paid)' }, 'Not Started', 'Active', 'Paused', 'Overdue', 'Stopped', 'Completed'];
   var REFILL_STATUS_OPTIONS = ['Overdue', 'Due Today', 'Upcoming', 'All Refills Done', 'Paused', 'Stopped', 'Completed'];
 
   function clientsTable(rows, opt) {
@@ -785,7 +787,7 @@
       '<div class="muted small" style="margin-top:6px">Emirates ID <b>' + esc(v.externalClientId) + '</b> · ' + esc(v.phone) + (isStaff() ? ' · ' + esc(v.companyName) : '') + ' · Internal ' + esc(v.clientId) +
       (isStaff() ? ' · Agent <b>' + esc(p.assignedAgent ? p.assignedAgent.name : 'Unassigned') + '</b>' : '') + '</div></div></div>' +
       (instr.length ? '<div class="alert alert-info"><b>📌 Instructions from Justlife</b>' + instr.map(function (n) { return '<div style="margin-top:4px">' + esc(n.Note) + ' <span class="muted small">— ' + esc(n.Created_By_Name) + ', ' + fmtDateTime(n.Created_At) + '</span></div>'; }).join('') + '</div>' : '') +
-      (lead ? '<div class="alert alert-warn"><b>Lead – not converted.</b> Reason: ' + esc(v.leadReason || '—') + '. No journey, refills, payment or agent yet. When the client comes back and pays, click <b>▶ Start journey</b>.</div>' : '') +
+      (lead ? '<div class="alert alert-warn"><b>Consultation done – no medication purchased.</b> ' + esc(v.leadReason || '') + '. The journey has not started and is waiting for payment. When the client pays, click <b>▶ Start journey</b>' + (isStaff() && p.assignedAgent ? ' · follow-up agent: <b>' + esc(p.assignedAgent.name) + '</b>' : '') + '.</div>' : '') +
       (j.awaitingReview ? '<div class="alert alert-warn">All ' + j.months + ' journey months have been supplied. ' + (isAdmin() ? 'Review the history and confirm completion.' : 'Justlife will review and confirm completion.') + '</div>' : '') +
       (j.statusReason && ['Paused', 'Stopped'].indexOf(j.status) >= 0 ? '<div class="alert alert-info">' + esc(j.status) + ': ' + esc(j.statusReason) + '</div>' : '') +
       '<div class="profile-actions">' + actions + '</div>' +
@@ -823,7 +825,7 @@
     var v = p.view, j = v.journey, c = p.client;
     if (tab === 'overview' && v.clientStatus === 'Lead') {
       return '<div class="grid-2"><div class="card"><div class="card-head"><h2>Client & registration</h2></div><div class="card-body">' +
-        kv([['Full name', c.Full_Name], ['Phone', c.Phone], ['Emirates ID', c.External_Client_ID], ['Justlife booking ref ID', c.First_Booking_Ref], ['Registered', fmtDate(c.Registration_Date), 1], ['Registered by', c.Created_By_Name], ['Partner company', v.companyName], ['Status', badge('Lead', 'lead'), 1], ['Reason', v.leadReason]]) +
+        kv([['Full name', c.Full_Name], ['Phone', c.Phone], ['Emirates ID', c.External_Client_ID], ['Justlife booking ref ID', c.First_Booking_Ref], ['Registered', fmtDate(c.Registration_Date), 1], ['Registered by', c.Created_By_Name], ['Partner company', v.companyName], ['Status', badge('Consultation only', 'lead'), 1], ['Reason', v.leadReason]]) +
         '</div></div><div class="card"><div class="card-head"><h2>Measurements</h2></div><div class="card-body">' + kv([['Height', c.Height_Cm ? c.Height_Cm + ' cm' : '—'], ['Weight', c.Weight_Kg ? c.Weight_Kg + ' kg' : '—'], ['BMI', c.BMI || '—']]) + '</div></div></div>';
     }
     if (tab === 'overview') {
@@ -977,7 +979,7 @@
       body:
         '<div class="form-section decision"><h3>Treatment decision</h3>' +
         field({ name: 'converted', label: 'Was the medication given and payment collected today?', type: 'select', required: true, full: true,
-          options: [{ value: 'Yes', label: 'Yes – medication given & payment collected → start the journey' }, { value: 'No', label: 'No – not eligible / did not agree / will decide later → save as lead' }] }) + '</div>' +
+          options: [{ value: 'Yes', label: 'Yes – medication given & payment collected → start the journey' }, { value: 'No', label: 'No – consultation only (no medication bought / no payment yet) → wait for payment' }] }) + '</div>' +
         section('Client details', [
           { name: 'fullName', label: 'Client full name', required: true, maxlength: 120 },
           { name: 'phone', label: 'Client phone number', required: true, type: 'tel', placeholder: '+971 50 123 4567', maxlength: 30 },
@@ -1357,7 +1359,7 @@
       var s = r[0], b = r[1].buckets, n = r[2].notifications, cohort = r[3];
       root.innerHTML = '<div class="kpis">' +
         kpi('Total registered clients', num(s.totalClients), 'navy', s.leads ? (s.totalClients - s.leads) + ' started · ' + s.leads + ' leads' : '', 'go-clients') +
-        kpi('Leads (not converted)', num(s.leads), 'grey', 'Start their journey when they come back', 'go-leads') +
+        kpi('Consultation only (not paid)', num(s.leads), 'grey', 'Start their journey once they pay', 'go-leads') +
         kpi('Active GLP clients', num(s.active), '', s.paused ? s.paused + ' paused' : '', 'go-active') +
         kpi('Completed journeys', num(s.completed), 'green', s.awaitingReview ? s.awaitingReview + ' awaiting review' : '') +
         kpi('Stopped clients', num(s.stopped), 'grey') +
@@ -1583,7 +1585,8 @@
   /* =========================================================================
    * AGENT CALLING (admin + Justlife agents)
    * ======================================================================= */
-  var CALL_TYPE_CLS = { WEEK: 'cl-week', REFILL: 'cl-refill', CALLBACK: 'cl-callback' };
+  var CALL_TYPE_CLS = { WEEK: 'cl-week', REFILL: 'cl-refill', CALLBACK: 'cl-callback', LEAD: 'cl-lead' };
+  function waKind(type) { return type === 'REFILL' ? 'refill' : (type === 'LEAD' ? 'lead' : 'week'); }
   var CALL_STATUS_CLS = { 'Completed': 'completed', 'Overdue': 'overdue', 'Due today': 'due-today', 'Upcoming': 'upcoming', 'Cancelled': 'cancelled' };
   function callTypeBadge(type, label) {
     var cls = CALL_TYPE_CLS[type] || 'cl-week';
@@ -1624,7 +1627,7 @@
       field({ name: 'dateField', label: 'Date applies to', type: 'select', required: true, noPlaceholder: true, value: p.dateField || 'due', options: [{ value: 'due', label: 'Call due date' }, { value: 'called', label: 'Call logged date' }] }) +
       field({ name: 'agentId', label: 'Agent', type: 'select', options: agentOptions(isAdmin()), value: defAgent, placeholder: 'All agents' }) +
       field({ name: 'companyId', label: 'Partner', type: 'select', options: companies, value: p.companyId, placeholder: 'All partners' }) +
-      field({ name: 'type', label: 'Call type', type: 'select', options: [{ value: 'WEEK', label: 'Week check-in calls' }, { value: 'REFILL', label: 'Refill calls' }, { value: 'CALLBACK', label: 'Callbacks' }], value: p.type, placeholder: 'All calls' }) +
+      field({ name: 'type', label: 'Call type', type: 'select', options: [{ value: 'WEEK', label: 'Week check-in calls' }, { value: 'REFILL', label: 'Refill calls' }, { value: 'CALLBACK', label: 'Callbacks' }, { value: 'LEAD', label: 'Lead follow-ups (unpaid)' }], value: p.type, placeholder: 'All calls' }) +
       field({ name: 'status', label: 'Status', type: 'select', options: [{ value: 'Pending', label: 'Pending (today + overdue)' }, { value: 'Due today', label: 'Due today' }, { value: 'Overdue', label: 'Overdue' }, { value: 'Upcoming', label: 'Upcoming' }, { value: 'Completed', label: 'Completed' }], value: p.status, placeholder: 'All statuses' }) +
       field({ name: 'connection', label: 'Connection', type: 'select', options: [{ value: 'connected', label: 'Connected' }, { value: 'not_connected', label: 'Not connected' }], value: p.connection, placeholder: 'Any' }) +
       field({ name: 'q', label: 'Search', placeholder: 'Ref ID, name, or mobile', value: p.q, attrs: ' type="search"' }).replace('class="field', 'class="field search') +
@@ -1651,7 +1654,7 @@
             var last = x.lastOutcome ? '<div class="small">' + esc(x.lastBy) + ' · ' + (x.lastConnected === 'Yes' ? 'connected' : 'not connected') + ' · ' + esc(x.lastOutcome) + '</div><div class="cell-sub"><i>' + esc(String(x.lastNote || '').slice(0, 70)) + (String(x.lastNote || '').length > 70 ? '…' : '') + '</i></div>' : (x.doneByRecord ? '<span class="cell-sub">Refill recorded</span>' : '<span class="cell-sub">—</span>');
             return '<tr class="clickable" data-action="call-journey" data-id="' + esc(x.clientId) + '"><td class="nowrap">' + fmtDate(x.dueDate) + '</td><td>' + callTypeBadge(x.type, x.label) + '<div style="margin-top:4px">' + badge(x.status, CALL_STATUS_CLS[x.status]) + '</div></td>' +
               '<td><div class="cell-title">' + esc(x.clientName) + '</div><div class="ref-id">Ref ' + esc(x.bookingRef) + '</div><div class="cell-sub">' + esc(x.phone) + '</div></td><td>' + esc(x.companyName) + '</td><td>' + esc(x.agentName) + '</td><td>' + last + '</td>' +
-              '<td class="nowrap">' + waButton(x.phone, x.clientName, x.type === 'REFILL' ? 'refill' : 'week') + ' <button class="btn btn-sm" data-action="log-call" data-id="' + esc(x.clientId) + '" data-key="' + esc(x.key) + '">' + (x.status === 'Completed' ? '＋ Add call' : 'Log call') + '</button></td></tr>';
+              '<td class="nowrap">' + waButton(x.phone, x.clientName, waKind(x.type)) + ' <button class="btn btn-sm" data-action="log-call" data-id="' + esc(x.clientId) + '" data-key="' + esc(x.key) + '">' + (x.status === 'Completed' ? '＋ Add call' : 'Log call') + '</button></td></tr>';
           }).join('') + '</tbody></table></div>' : emptyState('No calls for these filters', '📞');
       }).catch(function (e) { $('#call-table').innerHTML = errorBlock(e); });
     };
@@ -1678,15 +1681,19 @@
     var m = activeCallJourney.modal, v = d.view, j = v.journey, s = d.stats, cur = d.currency;
     $('.modal-head h2', m.el).textContent = v.fullName;
     var nextOpen = d.tasks.filter(function (t) { return t.status === 'Overdue' || t.status === 'Due today' || t.status === 'Upcoming'; })[0];
+    var isLeadC = v.clientStatus === 'Lead';
     var last = d.lastCall;
     var html = '<div class="jsum"><div><b class="jname">' + esc(v.fullName) + '</b> <span class="muted small">' + esc(v.firstBookingRef) + ' · ' + esc(v.phone) + ' · ' + esc(v.companyName) + '</span></div>' +
-      '<div class="muted small">Started ' + fmtDate(j.startDate) + ' · ' + j.months + '-month plan to ' + fmtDate(j.endDate) + ' · now in month ' + j.currentMonth + ' of ' + j.months + ' · ' + esc(d.agent ? d.agent.name : 'Unassigned') + ' · ' + statusBadge(j) + '</div>' +
+      (isLeadC ? '<div class="muted small">Consultation on ' + fmtDate(v.registrationDate) + ' · no medication bought / not paid yet · ' + esc(v.leadReason || '') + ' · ' + esc(d.agent ? d.agent.name : 'Unassigned') + ' · ' + statusBadge(j) + '</div>' +
+        '<div class="alert alert-warn small">Ask the client why they completed the consultation but did not start the medication, and log a note. If they have paid, click <b>▶ Start journey</b>.</div>'
+      : '<div class="muted small">Started ' + fmtDate(j.startDate) + ' · ' + j.months + '-month plan to ' + fmtDate(j.endDate) + ' · now in month ' + j.currentMonth + ' of ' + j.months + ' · ' + esc(d.agent ? d.agent.name : 'Unassigned') + ' · ' + statusBadge(j) + '</div>') +
       '<div class="jstats">' + [[s.calls, 'calls made'], [s.connected, 'connected'], [s.refills, 'refills'], [money(s.startingAmount, cur), 'starting amount'], [money(s.refillValue, cur), 'refill value'], [money(s.totalCollected, cur), 'total collected']].map(function (x) { return '<div><b>' + x[0] + '</b><span>' + x[1] + '</span></div>'; }).join('') + '</div>' +
       (last ? '<div class="lastcall"><div class="lc-head">LAST CALL — ' + fmtDateTime(last.Called_At).toUpperCase() + ' · ' + esc(last.Agent_Name).toUpperCase() + '</div>' + esc(last.Outcome) + ' — <i>' + esc(last.Note) + '</i></div>' : '') + '</div>' +
-      '<div class="profile-actions">' + (nextOpen ? '<button class="btn btn-primary" data-cj="log">📞 Log call · ' + esc(nextOpen.label) + '</button>' + waButton(v.phone, v.fullName, nextOpen.type === 'REFILL' ? 'refill' : 'week') : '<button class="btn btn-primary" data-cj="log">📞 Log call</button>') +
+      '<div class="profile-actions">' + (nextOpen ? '<button class="btn btn-primary" data-cj="log">📞 Log call · ' + esc(nextOpen.label) + '</button>' + waButton(v.phone, v.fullName, waKind(nextOpen.type)) : '<button class="btn btn-primary" data-cj="log">📞 Log call</button>') +
       (j.nextScheduleId && ['Active', 'Overdue', 'Not Started'].indexOf(j.status) >= 0 ? '<button class="btn btn-success" data-cj="refill">＋ Record refill</button>' : '') +
       (j.nextScheduleId && ['Stopped', 'Completed'].indexOf(j.status) < 0 ? '<button class="btn" data-cj="reschedule">📅 Reschedule refill</button>' : '') +
-      (j.status !== 'Stopped' ? '<button class="btn" data-cj="extend">⏩ Extend journey</button>' : '') +
+      (isLeadC ? '<button class="btn btn-success" data-cj="start">▶ Start journey (payment received)</button>' : '') +
+      (j.status !== 'Stopped' && !isLeadC ? '<button class="btn" data-cj="extend">⏩ Extend journey</button>' : '') +
       '<button class="btn" data-cj="note">📝 Note for partner</button><button class="btn" data-cj="profile">👤 Full profile</button>' +
       (isAdmin() ? '<button class="btn" data-cj="reassign">🔁 Reassign agent</button>' : '') + '</div>';
     var partnerNotes = d.notes.filter(function (n) { return n.Note_Type !== 'AGENT' && n.Note_Type !== 'INTERNAL'; }).slice(0, 3);
@@ -1707,6 +1714,7 @@
     on('refill', function () { withClient(v.clientId, function (p) { refillModal(p); }); });
     on('reschedule', function () { withClient(v.clientId, rescheduleModal); });
     on('extend', function () { withClient(v.clientId, extendModal); });
+    on('start', function () { withClient(v.clientId, startJourneyModal); });
     on('note', function () { withClient(v.clientId, noteModal); });
     on('profile', function () { openClientProfile(v.clientId); });
     on('reassign', function () {
@@ -1726,7 +1734,7 @@
       var def = taskKey || (tasks.filter(function (t) { return t.status !== 'Completed'; })[0] || {}).key;
       formModal({
         title: 'Log call', size: 'md', submitLabel: 'Save call', subtitle: esc(d.view.fullName) + ' · ' + esc(d.view.phone),
-        body: '<div class="row">' + waButton(d.view.phone, d.view.fullName, 'week') + waButton(d.view.phone, d.view.fullName, 'refill') + '<span class="muted small">Left: wellbeing check-in · Right: refill reminder</span></div>' +
+        body: '<div class="row">' + (d.view.clientStatus === 'Lead' ? waButton(d.view.phone, d.view.fullName, 'lead') + '<span class="muted small">Consultation follow-up message</span>' : waButton(d.view.phone, d.view.fullName, 'week') + waButton(d.view.phone, d.view.fullName, 'refill') + '<span class="muted small">Left: wellbeing check-in · Right: refill reminder</span>') + '</div>' +
           '<div class="form-grid">' +
           field({ name: 'taskKey', label: 'Call', type: 'select', required: true, options: opts2, value: def, full: true }) +
           field({ name: 'connected', label: 'Connected?', type: 'select', required: true, options: [{ value: 'Yes', label: 'Yes – spoke to client' }, { value: 'No', label: 'No – not connected' }] }) +
@@ -1753,6 +1761,10 @@
           return api('calling.log', f, { requestId: rid }).then(function () {
             afterCallChange('Call saved' + (f.callbackDate ? ' · callback ' + fmtDate(f.callbackDate) : ''));
             var openRefill = d.view.journey.nextScheduleId && ['Active', 'Overdue', 'Not Started'].indexOf(d.view.journey.status) >= 0;
+            if (f.outcome === 'Lead - Paid / Will Start Journey' && d.view.clientStatus === 'Lead') {
+              confirmBox({ title: 'Start the journey now?', message: 'If the client has paid, start the journey now: the start date, medication and payment are recorded and the call plan begins.', confirmLabel: 'Start journey' })
+                .then(function (yes) { if (yes) withClient(clientId, startJourneyModal); });
+            }
             if (f.outcome === 'Refill Converted' && openRefill) {
               confirmBox({ title: 'Record the refill now?', message: 'The client confirmed the refill. Record it now so the partner and the refill schedule update everywhere.', confirmLabel: 'Record refill' })
                 .then(function (yes) { if (yes) withClient(clientId, refillModal); });
@@ -1784,13 +1796,13 @@
           kpi('Calls due (to date)', num(tot('due')), '', num(tot('dueDone')) + ' done') + kpi('Overdue now', num(tot('overdueNow')), 'red') +
           kpi('Refills converted on calls', num(tot('converted')), 'purple', money(tot('convertedAmount'), cur)) + kpi('Refills recorded by agents', num(tot('refillsRecorded')), 'purple', money(tot('refillsRecordedAmount'), cur)) + '</div>' +
           '<div class="card"><div class="card-head"><h2>Agent performance</h2><span class="muted small">' + (r.from ? fmtDate(r.from) + ' → ' + fmtDate(r.to) : 'All time') + '</span></div><div class="card-body flush"><div class="table-wrap"><table class="table"><thead><tr>' +
-          '<th>Agent</th><th class="num">Clients</th><th class="num">Calls due</th><th class="num">Done</th><th class="num">Completion</th><th class="num">Calls logged</th><th class="num">Connected</th><th class="num">Connect rate</th><th class="num">Clients called</th><th class="num">Refills converted</th><th class="num">Refills recorded</th><th class="num">Extensions</th><th class="num">Overdue now</th><th class="num">Pending today</th></tr></thead><tbody>' +
+          '<th>Agent</th><th class="num">Clients</th><th class="num">Calls due</th><th class="num">Done</th><th class="num">Completion</th><th class="num">Calls logged</th><th class="num">Connected</th><th class="num">Connect rate</th><th class="num">Clients called</th><th class="num">Refills converted</th><th class="num">Refills recorded</th><th class="num">Leads (assigned / converted)</th><th class="num">Extensions</th><th class="num">Overdue now</th><th class="num">Pending today</th></tr></thead><tbody>' +
           (A.length ? A.map(function (x) {
             return '<tr><td><div class="cell-title">' + esc(x.name) + (x.status !== 'Active' ? ' ' + badge('Inactive', 'grey') : '') + '</div><div class="cell-sub">' + esc(x.email) + '</div></td><td class="num">' + num(x.activeClients) + ' / ' + num(x.clients) + '</td><td class="num">' + num(x.due) + '</td><td class="num">' + num(x.dueDone) + '</td><td class="num">' + pct(x.completionRate) + '</td>' +
               '<td class="num strong">' + num(x.calls) + '</td><td class="num">' + num(x.connected) + '</td><td class="num">' + pct(x.connectRate) + '</td><td class="num">' + num(x.clientsCalled) + '</td>' +
-              '<td class="num">' + num(x.converted) + '<div class="cell-sub">' + money(x.convertedAmount, cur) + '</div></td><td class="num">' + num(x.refillsRecorded) + '<div class="cell-sub">' + money(x.refillsRecordedAmount, cur) + '</div></td><td class="num">' + num(x.extensions) + '</td>' +
+              '<td class="num">' + num(x.converted) + '<div class="cell-sub">' + money(x.convertedAmount, cur) + '</div></td><td class="num">' + num(x.refillsRecorded) + '<div class="cell-sub">' + money(x.refillsRecordedAmount, cur) + '</div></td><td class="num">' + num(x.leadsAssigned) + ' / <b>' + num(x.leadsConverted) + '</b></td><td class="num">' + num(x.extensions) + '</td>' +
               '<td class="num">' + (x.overdueNow ? '<b style="color:var(--red)">' + num(x.overdueNow) + '</b>' : 0) + '</td><td class="num">' + num(x.pendingToday) + '</td></tr>';
-          }).join('') : '<tr><td colspan="14">' + emptyState('No agents yet') + '</td></tr>') + '</tbody></table></div></div></div>' +
+          }).join('') : '<tr><td colspan="15">' + emptyState('No agents yet') + '</td></tr>') + '</tbody></table></div></div></div>' +
           '<div class="grid-2">' + chartBox('ch-agent-calls', 'Calls by agent', 'Logged vs connected') + chartBox('ch-agent-refills', 'Refill value by agent', 'Converted on calls vs recorded') + '</div></div>';
         var names = A.map(function (x) { return x.name; });
         makeChart('ch-agent-calls', 'bar', names, [{ label: 'Calls logged', data: A.map(function (x) { return x.calls; }), color: PALETTE[0] }, { label: 'Connected', data: A.map(function (x) { return x.connected; }), color: PALETTE[3] }, { label: 'Calls due', data: A.map(function (x) { return x.due; }), color: PALETTE[2] }]);
@@ -1804,8 +1816,8 @@
   function callingAgents(body) {
     body.innerHTML = skeleton(2);
     api('agents.list').then(function (r) {
-      body.innerHTML = '<div class="stack"><div class="alert alert-info">Agents sign in on this admin page with <b>Sign in with Google</b> using their @justlife.com account and only see Agent Calling. New clients are assigned in rotation (agent 1 → 2 → 3 → 1…). Next in rotation: <b>' + esc(r.nextInRotation || '—') + '</b>. If someone is also an active Admin, they sign in as Admin and can still filter their own calls.</div>' +
-        '<div class="card"><div class="card-head"><h2>Agents</h2><button class="btn btn-sm" data-assign-all>🔁 Assign unassigned clients</button><button class="btn btn-sm btn-primary" data-add-agent>＋ Add agent</button></div><div class="card-body flush">' +
+      body.innerHTML = '<div class="stack"><div class="alert alert-info">Agents sign in on this admin page with <b>Sign in with Google</b> using their @justlife.com account and only see Agent Calling. New clients are assigned in rotation (agent 1 → 2 → 3 → 1…). Next in rotation: <b>' + esc(r.nextInRotation || '—') + '</b>. <b>Every Monday</b> clients who had a consultation but have not paid for 7+ days are shared out the same way, and each agent gets an email. If someone is also an active Admin, they sign in as Admin and can still filter their own calls.</div>' +
+        '<div class="card"><div class="card-head"><h2>Agents</h2><button class="btn btn-sm" data-assign-leads title="Consultation-only clients unpaid for 7+ days">📋 Assign unpaid leads now</button><button class="btn btn-sm" data-assign-all>🔁 Assign unassigned clients</button><button class="btn btn-sm btn-primary" data-add-agent>＋ Add agent</button></div><div class="card-body flush">' +
         (r.agents.length ? '<div class="table-wrap"><table class="table"><thead><tr><th>#</th><th>Agent</th><th>Status</th><th class="num">Assigned clients</th><th>Last sign-in</th><th></th></tr></thead><tbody>' + r.agents.map(function (g, i) {
           return '<tr><td>' + (i + 1) + '</td><td><div class="cell-title">' + esc(g.Full_Name) + '</div><div class="cell-sub">' + esc(g.Email) + (g.Phone ? ' · ' + esc(g.Phone) : '') + '</div></td><td>' + badge(g.Status, g.Status === 'Active' ? 'green' : 'grey') + '</td><td class="num">' + num(g.clientCount) + '</td><td class="nowrap">' + fmtDateTime(g.Last_Login_At) + '</td>' +
             '<td class="nowrap"><button class="btn btn-sm" data-ag-edit="' + esc(g.Agent_ID) + '">Edit</button> <button class="btn btn-sm ' + (g.Status === 'Active' ? 'btn-danger' : 'btn-success') + '" data-ag-status="' + esc(g.Agent_ID) + '">' + (g.Status === 'Active' ? 'Deactivate' : 'Activate') + '</button></td></tr>';
@@ -1822,6 +1834,11 @@
             .catch(function (e) { toast(e.message, 'error'); });
         };
       });
+      $('[data-assign-leads]', body).onclick = function () {
+        confirmBox({ title: 'Assign unpaid leads now?', message: 'Consultation-only clients still unpaid after 7 days are shared equally between active agents, and each agent is emailed their list. This also runs automatically every Monday.', confirmLabel: 'Assign now' })
+          .then(function (ok) { if (ok) return api('calling.assignLeads', {}, { requestId: uuid() }).then(function (x) { toast(x.assigned + ' lead(s) assigned · ' + x.emailed + ' agent email(s)', 'success'); reload(); }); })
+          .catch(function (e) { toast(e.message, 'error'); });
+      };
       $('[data-assign-all]', body).onclick = function () {
         formModal({ title: 'Assign clients to agents', size: 'sm', submitLabel: 'Assign now',
           body: '<p>Clients without an agent are shared out in rotation between the active agents.</p>' + field({ name: 'includeInactiveAgents', label: 'Also move clients of deactivated agents', type: 'checkbox' }),
