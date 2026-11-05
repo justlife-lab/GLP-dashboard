@@ -93,12 +93,54 @@
   function ApiError(code, message) { this.code = code; this.message = message; }
   ApiError.prototype = Object.create(Error.prototype);
 
+  /* Loading indicator: top bar + floating "Loading… 63%" pill. The server cannot report real progress,
+     so the % is estimated (eases towards 95%) and jumps to 100% when all requests have finished. */
+  var load = { pct: 0, timer: null, shownAt: 0 };
+  function loadPill() {
+    var p = $('#load-pill');
+    if (!p) {
+      p = document.createElement('div'); p.id = 'load-pill'; p.className = 'load-pill'; p.setAttribute('role', 'status'); p.setAttribute('aria-live', 'polite');
+      p.innerHTML = '<span class="spin"></span><span class="lp-text">Loading data… 0%</span><span class="lp-bar"><i></i></span>';
+      document.body.appendChild(p);
+    }
+    return p;
+  }
+  function paintLoad() {
+    var el = $('#top-loader'), p = loadPill();
+    el.style.width = load.pct + '%';
+    $('.lp-text', p).textContent = (load.pct >= 100 ? 'Done' : 'Loading data… ') + (load.pct >= 100 ? '' : Math.floor(load.pct) + '%');
+    $('.lp-bar i', p).style.width = load.pct + '%';
+  }
   function loader(on) {
     var el = $('#top-loader');
     state.busy += on ? 1 : -1;
-    if (state.busy > 0) { el.classList.remove('done'); el.classList.add('active'); }
-    else { state.busy = 0; el.classList.remove('active'); el.classList.add('done'); }
+    if (state.busy > 0) {
+      if (!load.timer) {
+        load.pct = 3; el.classList.remove('done'); el.classList.add('active'); el.style.transition = 'width .2s ease';
+        var p = loadPill(); p.classList.remove('done'); p.classList.add('show');
+        document.body.classList.add('is-loading');
+        load.timer = setInterval(function () { load.pct = Math.min(95, load.pct + (95 - load.pct) * 0.07 + 0.3); paintLoad(); }, 120);
+        paintLoad();
+      }
+    } else {
+      state.busy = 0;
+      clearInterval(load.timer); load.timer = null; load.pct = 100; paintLoad();
+      var pill = loadPill(); pill.classList.add('done');
+      document.body.classList.remove('is-loading');
+      setTimeout(function () { if (!load.timer) { pill.classList.remove('show'); el.classList.remove('active'); el.classList.add('done'); el.style.width = '0'; } }, 450);
+      unlockBusy();
+    }
   }
+  /* Double-click protection: the button/row the user clicked stays locked until its requests finish. */
+  var busyEls = [];
+  function lockBusy(el) { if (!el || el.classList.contains('is-busy')) return; el.classList.add('is-busy'); el.setAttribute('aria-busy', 'true'); busyEls.push(el); }
+  function unlockBusy() { busyEls.forEach(function (el) { el.classList.remove('is-busy'); el.removeAttribute('aria-busy'); }); busyEls = []; }
+  document.addEventListener('click', function (e) {
+    var el = e.target.closest('button, [data-action], tr.clickable, .chip, a.btn');
+    if (!el) return;
+    if (el.classList.contains('is-busy')) { e.preventDefault(); e.stopPropagation(); toast('Still loading – please wait…'); return; }
+    setTimeout(function () { if (state.busy > 0 && !el.closest('.modal-backdrop[data-closing]')) lockBusy(el); }, 0);
+  }, true);
 
   function api(action, payload, options) {
     options = options || {};
@@ -106,7 +148,7 @@
     var body = JSON.stringify({ action: action, payload: payload || {}, token: state.token || undefined, requestId: options.requestId });
     var ctrl = window.AbortController ? new AbortController() : null;
     var timer = setTimeout(function () { if (ctrl) ctrl.abort(); }, CFG.REQUEST_TIMEOUT_MS || 45000);
-    loader(true);
+    if (!options.background) loader(true);
     return fetch(CFG.API_URL, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: body, redirect: 'follow', credentials: 'omit', signal: ctrl ? ctrl.signal : undefined })
       .catch(function (e) { throw new ApiError('NETWORK', e && e.name === 'AbortError' ? 'The server took too long to respond. Please try again.' : 'Cannot reach the server. Check your connection and try again.'); })
       .then(function (res) { return res.json().catch(function () { throw new ApiError('BAD_RESPONSE', 'Unexpected response from the server.'); }); })
@@ -117,7 +159,7 @@
         if (e.code === 'PASSWORD_CHANGE_REQUIRED') changePasswordModal(true);
         throw new ApiError(e.code, e.message);
       })
-      .finally(function () { clearTimeout(timer); loader(false); });
+      .finally(function () { clearTimeout(timer); if (!options.background) loader(false); });
   }
 
   /* ===========================================================================
@@ -595,12 +637,12 @@
   window.addEventListener('hashchange', route);
   function refreshCounts() {
     if (isAgent()) {
-      api('calling.list', { preset: 'today', agentId: state.user.agentId }).then(function (r) { renderNav({ callsPending: r.summary.pendingToday + r.summary.overdue }); }).catch(function () {});
+      api('calling.list', { preset: 'today', agentId: state.user.agentId }, { background: true }).then(function (r) { renderNav({ callsPending: r.summary.pendingToday + r.summary.overdue }); }).catch(function () {});
       return;
     }
-    var calls = [api('dashboard.summary', {})];
-    if (isAdmin()) calls.push(api('calling.list', { preset: 'today' }));
-    if (isAdmin()) calls.push(api('upsell.list', { preset: 'all', upsellStatus: 'Pending' }));
+    var calls = [api('dashboard.summary', {}, { background: true })];
+    if (isAdmin()) calls.push(api('calling.list', { preset: 'today' }, { background: true }));
+    if (isAdmin()) calls.push(api('upsell.list', { preset: 'all', upsellStatus: 'Pending' }, { background: true }));
     Promise.all(calls).then(function (r) {
       var s = r[0], cl = isAdmin() ? r[1] : null, up = isAdmin() ? r[2] : null;
       renderNav({ overdue: s.refillsOverdue, unread: s.unreadNotifications, upsellPending: up ? up.counts.registrations.pending + up.counts.refills.pending : 0, callsPending: cl ? cl.summary.pendingToday + cl.summary.overdue : 0 });
@@ -644,11 +686,11 @@
   function clientsTable(rows, opt) {
     opt = opt || {};
     if (!rows.length) return emptyState(opt.emptyText || 'No clients match these filters.', '🔍');
-    var h = '<div class="table-wrap"><table class="table"><thead><tr><th>Client</th>' + (isAdmin() ? '<th>Company</th>' : '') +
+    var h = '<div class="table-wrap"><table class="table"><thead><tr><th>Client / Ref ID</th>' + (isAdmin() ? '<th>Company</th>' : '') +
       '<th>Medication</th><th>Journey</th><th>Status</th><th>Next refill</th><th>Registered</th>' + (opt.actions ? '<th></th>' : '') + '</tr></thead><tbody>';
     rows.forEach(function (c) {
       h += '<tr class="clickable" data-action="open-client" data-id="' + esc(c.clientId) + '">' +
-        '<td><div class="cell-title">' + esc(c.fullName) + '</div><div class="cell-sub">' + esc(c.externalClientId) + ' · ' + esc(c.phone) + '</div></td>' +
+        '<td><div class="cell-title">' + esc(c.fullName) + '</div><div class="ref-id">Ref ' + esc(c.firstBookingRef || '—') + '</div><div class="cell-sub">EID ' + esc(c.externalClientId) + ' · ' + esc(c.phone) + '</div></td>' +
         (isAdmin() ? '<td>' + esc(c.companyName) + '</td>' : '') +
         '<td><div>' + esc(c.medicationName) + '</div><div class="cell-sub">' + esc(c.medicationType) + ' · ' + esc(c.dosage) + '</div></td>' +
         '<td>' + journeyBar(c.journey) + '</td>' +
@@ -699,6 +741,7 @@
    * ========================================================================= */
   var activeProfile = null;
   function openClientProfile(clientId) {
+    if (activeProfile && activeProfile.id === clientId) return; // already open / loading
     var m = modal({ title: 'Client profile', size: 'xl', body: skeleton(3), noAutofocus: true, onClose: function () { activeProfile = null; } });
     activeProfile = { id: clientId, modal: m, tab: 'overview' };
     loadProfile();
@@ -1603,11 +1646,11 @@
             r.agents.map(function (g) { return '<tr class="clickable" data-pick-agent="' + esc(g.agentId) + '"><td class="strong">' + esc(g.name) + '</td><td class="num">' + num(g.clients) + '</td><td class="num">' + num(g.today) + '</td><td class="num">' + num(g.pendingToday) + '</td><td class="num">' + (g.overdue ? '<b style="color:var(--red)">' + num(g.overdue) + '</b>' : 0) + '</td><td class="num">' + num(g.upcoming) + '</td><td class="num">' + num(g.completedToday) + '</td></tr>'; }).join('') + '</tbody></table></div></div></div>' : '');
         $$('[data-pick-agent]').forEach(function (tr) { tr.onclick = function () { form.agentId.value = tr.getAttribute('data-pick-agent'); load(); }; });
         $('#call-count').textContent = r.total + ' row(s) in view';
-        $('#call-table').innerHTML = r.rows.length ? '<div class="table-wrap"><table class="table"><thead><tr><th>Due</th><th>Call</th><th>Client</th><th>Partner</th><th>Agent</th><th>Last result</th><th></th></tr></thead><tbody>' +
+        $('#call-table').innerHTML = r.rows.length ? '<div class="table-wrap"><table class="table"><thead><tr><th>Due</th><th>Call</th><th>Client / Ref ID</th><th>Partner</th><th>Agent</th><th>Last result</th><th></th></tr></thead><tbody>' +
           r.rows.map(function (x) {
             var last = x.lastOutcome ? '<div class="small">' + esc(x.lastBy) + ' · ' + (x.lastConnected === 'Yes' ? 'connected' : 'not connected') + ' · ' + esc(x.lastOutcome) + '</div><div class="cell-sub"><i>' + esc(String(x.lastNote || '').slice(0, 70)) + (String(x.lastNote || '').length > 70 ? '…' : '') + '</i></div>' : (x.doneByRecord ? '<span class="cell-sub">Refill recorded</span>' : '<span class="cell-sub">—</span>');
             return '<tr class="clickable" data-action="call-journey" data-id="' + esc(x.clientId) + '"><td class="nowrap">' + fmtDate(x.dueDate) + '</td><td>' + callTypeBadge(x.type, x.label) + '<div style="margin-top:4px">' + badge(x.status, CALL_STATUS_CLS[x.status]) + '</div></td>' +
-              '<td><div class="cell-title">' + esc(x.clientName) + '</div><div class="cell-sub">' + esc(x.bookingRef) + ' · ' + esc(x.phone) + '</div></td><td>' + esc(x.companyName) + '</td><td>' + esc(x.agentName) + '</td><td>' + last + '</td>' +
+              '<td><div class="cell-title">' + esc(x.clientName) + '</div><div class="ref-id">Ref ' + esc(x.bookingRef) + '</div><div class="cell-sub">' + esc(x.phone) + '</div></td><td>' + esc(x.companyName) + '</td><td>' + esc(x.agentName) + '</td><td>' + last + '</td>' +
               '<td class="nowrap">' + waButton(x.phone, x.clientName, x.type === 'REFILL' ? 'refill' : 'week') + ' <button class="btn btn-sm" data-action="log-call" data-id="' + esc(x.clientId) + '" data-key="' + esc(x.key) + '">' + (x.status === 'Completed' ? '＋ Add call' : 'Log call') + '</button></td></tr>';
           }).join('') + '</tbody></table></div>' : emptyState('No calls for these filters', '📞');
       }).catch(function (e) { $('#call-table').innerHTML = errorBlock(e); });
@@ -1621,6 +1664,7 @@
 
   var activeCallJourney = null;
   function openCallJourney(clientId) {
+    if (activeCallJourney && activeCallJourney.id === clientId) return;
     var m = modal({ title: 'Call journey', subtitle: 'Full journey since day one', size: 'lg', body: skeleton(2), noAutofocus: true, onClose: function () { activeCallJourney = null; } });
     activeCallJourney = { id: clientId, modal: m };
     loadCallJourney();
