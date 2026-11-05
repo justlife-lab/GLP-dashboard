@@ -588,7 +588,7 @@
     return api('meta.options').then(function (meta) {
       state.meta = meta;
       $('#login-screen').hidden = true; $('#app').hidden = false;
-      renderNav(); renderUserBox();
+      renderNav(); renderUserBox(); mountBell();
       if ($('#brand-company')) $('#brand-company').textContent = state.user.companyName || 'Partner Portal';
       route();
     }).catch(function (e) { if (e.code !== 'AUTH') showLogin(e.message); });
@@ -637,7 +637,53 @@
     if (location.hash === target) route(); else location.hash = target;
   }
   window.addEventListener('hashchange', route);
+  /* ---------- 🔔 Updates inbox ---------- */
+  function mountBell() {
+    if (!$('#bell')) {
+      var b = document.createElement('button');
+      b.id = 'bell'; b.className = 'icon-btn bell'; b.setAttribute('data-action', 'open-inbox'); b.setAttribute('aria-label', 'Updates');
+      b.innerHTML = '🔔<span class="bell-count" hidden></span>';
+      $('.topbar').insertBefore(b, $('#topbar-actions').nextSibling);
+    }
+    clearInterval(state.pollTimer);
+    state.pollTimer = setInterval(function () { if (state.user && !document.hidden) refreshInbox(); }, 90000);
+    refreshInbox();
+  }
+  function refreshInbox() {
+    return api('inbox.list', { limit: 1 }, { background: true }).then(function (r) {
+      var c = $('#bell .bell-count'); if (!c) return;
+      c.hidden = !r.unread; c.textContent = r.unread > 99 ? '99+' : r.unread;
+    }).catch(function () {});
+  }
+  var INBOX_ICON = { MESSAGE: '💬', NEW_CLIENT: '🆕', LEAD: '🩺', JOURNEY_STARTED: '▶️', REFILL: '💊', RESCHEDULE: '📅', EXTENSION: '⏩', STATUS: '⚑', INSTRUCTION: '📌', NOTE: '📝', ASSIGNED: '🎧', LEAD_ASSIGNED: '📋', CALL_REMINDER: '⏰', EOD_PENDING: '⚠️' };
+  function openInbox() {
+    var filter = 'all';
+    var m = modal({ title: 'Updates', subtitle: isAdmin() ? 'All activity across partners and agents' : (isAgent() ? 'Updates on your clients' : 'Updates from Justlife on your clients'), size: 'md', body: skeleton(2), noAutofocus: true,
+      footer: '<button class="btn" data-inbox-all>✓ Mark all as read</button><button class="btn btn-primary" data-close>Close</button>' });
+    var load = function () {
+      api('inbox.list', { limit: 150, unreadOnly: filter === 'unread' }).then(function (r) {
+        var items = r.items.filter(function (x) { return filter !== 'messages' || x.kind === 'MESSAGE'; });
+        m.body('<div class="chips">' + [['all', 'All'], ['unread', 'Unread (' + r.unread + ')'], ['messages', '💬 Messages']].map(function (f) { return '<button class="chip ' + (f[0] === filter ? 'active' : '') + '" data-if="' + f[0] + '">' + f[1] + '</button>'; }).join('') + '</div>' +
+          (items.length ? '<div class="inbox">' + items.map(function (x) {
+            return '<button class="inbox-item ' + (x.read ? '' : 'unread') + '" data-ii="' + esc(x.id) + '" data-client="' + esc(x.clientId) + '" data-kind="' + esc(x.kind) + '"><span class="ii-ico">' + (INBOX_ICON[x.kind] || '🔔') + '</span><span class="ii-main"><b>' + esc(x.title) + '</b>' +
+              '<span class="ii-body">' + esc(x.body) + '</span><span class="ii-meta">' + esc(x.actor) + (x.companyName ? ' · ' + esc(x.companyName) : '') + (x.client ? ' · ' + esc(x.client) : '') + ' · ' + fmtDateTime(x.at) + '</span></span>' + (x.read ? '' : '<span class="ii-dot"></span>') + '</button>';
+          }).join('') + '</div>' : emptyState(filter === 'unread' ? 'You are all caught up' : 'No updates yet', '🔔')));
+        $$('[data-if]', m.el).forEach(function (b) { b.onclick = function () { filter = b.getAttribute('data-if'); load(); }; });
+        $$('[data-ii]', m.el).forEach(function (b) {
+          b.onclick = function () {
+            api('inbox.markRead', { ids: [b.getAttribute('data-ii')] }, { background: true }).then(refreshInbox).catch(function () {});
+            var cid = b.getAttribute('data-client');
+            if (cid) { m.close(); openClientProfile(cid, b.getAttribute('data-kind') === 'MESSAGE' ? 'discussion' : 'overview'); }
+          };
+        });
+      }).catch(function (e) { m.body(errorBlock(e)); });
+    };
+    $('[data-inbox-all]', m.el).onclick = function () { api('inbox.markRead', { all: true }).then(function (x) { toast(x.marked + ' marked as read', 'success'); refreshInbox(); load(); }).catch(function (e) { toast(e.message, 'error'); }); };
+    load();
+  }
+
   function refreshCounts() {
+    refreshInbox();
     if (isAgent()) {
       api('calling.list', { preset: 'today', agentId: state.user.agentId }, { background: true }).then(function (r) { renderNav({ callsPending: r.summary.pendingToday + r.summary.overdue }); }).catch(function () {});
       return;
@@ -664,6 +710,7 @@
     'go': function (el) { var p = {}; var raw = el.getAttribute('data-params'); if (raw) { try { p = JSON.parse(raw); } catch (e) {} } go(el.getAttribute('data-view'), p); },
     'export': function (el) { exportModal(el.getAttribute('data-dataset')); },
     'change-password': function () { changePasswordModal(false); },
+    'open-inbox': function () { openInbox(); },
     'start-journey': function (el) { withClient(el.getAttribute('data-id'), startJourneyModal); },
     'wa': function (el) { window.open(el.getAttribute('href'), '_blank', 'noopener'); },
     'call-journey': function (el) { openCallJourney(el.getAttribute('data-id')); },
@@ -742,10 +789,10 @@
    * 8. CLIENT PROFILE (complete history)
    * ========================================================================= */
   var activeProfile = null;
-  function openClientProfile(clientId) {
-    if (activeProfile && activeProfile.id === clientId) return; // already open / loading
+  function openClientProfile(clientId, tab) {
+    if (activeProfile && activeProfile.id === clientId) { if (tab) { activeProfile.tab = tab; loadProfile(); } return; } // already open / loading
     var m = modal({ title: 'Client profile', size: 'xl', body: skeleton(3), noAutofocus: true, onClose: function () { activeProfile = null; } });
-    activeProfile = { id: clientId, modal: m, tab: 'overview' };
+    activeProfile = { id: clientId, modal: m, tab: tab || 'overview' };
     loadProfile();
   }
   function loadProfile() {
@@ -778,6 +825,7 @@
       if (j.storedStatus !== 'Completed' && j.storedStatus !== 'Stopped') actions += '<button class="btn ' + (j.awaitingReview ? 'btn-primary' : '') + '" data-p="complete">✅ Confirm completion</button>';
     }
     var tabs = [['overview', 'Overview'], ['refills', 'Refills (' + p.refills.length + ')'], ['payments', 'Payments (' + p.payments.length + ')'], ['timeline', 'Full history'], ['notes', 'Notes (' + (p.notes.length + p.doctorNotes.length) + ')'], ['reschedules', 'Reschedules (' + p.reschedules.length + ')']];
+    tabs.splice(1, 0, ['discussion', '💬 Discussion (' + (p.messages || []).length + ')']);
     if (isStaff()) tabs.push(['calls', 'Calls (' + (p.callLogs || []).length + ')']);
     if (isAdmin()) tabs.push(['audit', 'Audit (' + (p.audit || []).length + ')']);
     var instr = p.notes.filter(function (n) { return n.Note_Type === 'AGENT'; }).slice(-3).reverse();
@@ -815,6 +863,19 @@
   function bindProfileTab(p) {
     var m = activeProfile && activeProfile.modal;
     if (!m) return;
+    var chat = $('[data-chat]', m.el);
+    if (chat) {
+      var box = $('.chat', m.el); if (box) box.scrollTop = box.scrollHeight;
+      var sending = false;
+      chat.addEventListener('submit', function (e) {
+        e.preventDefault();
+        var t = chat.message.value.trim(); if (!t || sending) return;
+        sending = true; var btn = $('button', chat); btn.disabled = true;
+        api('messages.send', { clientId: p.view.clientId, message: t }, { requestId: uuid() }).then(function () { activeProfile.tab = 'discussion'; loadProfile(); loadCallJourney(); })
+          .catch(function (er) { toast(er.message, 'error'); btn.disabled = false; sending = false; });
+      });
+      chat.message.addEventListener('keydown', function (e) { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) chat.requestSubmit(); });
+    }
     $$('[data-edit-refill]', m.el).forEach(function (b) { b.addEventListener('click', function () { editRefillModal(p, p.refills.filter(function (r) { return r.Refill_ID === b.getAttribute('data-edit-refill'); })[0]); }); });
     $$('[data-edit-payment]', m.el).forEach(function (b) { b.addEventListener('click', function () { editPaymentModal(p.payments.filter(function (x) { return x.Transaction_ID === b.getAttribute('data-edit-payment'); })[0], function () { afterChange('Payment updated'); }); }); });
   }
@@ -892,6 +953,15 @@
         }).join('') + '</tbody></table></div>';
     }
     if (tab === 'audit') return auditTable(p.audit || []);
+    if (tab === 'discussion') {
+      var msgs = p.messages || [], me = state.user.id;
+      return '<div class="chat">' + (msgs.length ? msgs.map(function (x) {
+        var mine = x.Author_ID === me, side = x.Author_Type === 'partner' ? 'partner' : 'justlife';
+        return '<div class="bubble ' + (mine ? 'mine' : '') + ' ' + side + '"><div class="b-meta">' + esc(x.Author_Name) + ' · ' + fmtDateTime(x.Created_At) + '</div><div class="b-text">' + esc(x.Message) + '</div></div>';
+      }).join('') : emptyState('No messages yet. Use this thread to coordinate about this client between the partner and Justlife.', '💬')) + '</div>' +
+        '<form class="chat-form" data-chat><textarea name="message" maxlength="2000" placeholder="Write a message to ' + (isStaff() ? 'the partner' : 'Justlife (agent & admin)') + '…" required></textarea><button class="btn btn-primary" type="submit">Send</button></form>' +
+        '<div class="muted small">Messages are visible to the partner and Justlife staff. The other side gets a 🔔 update. Ctrl+Enter to send.</div>';
+    }
     if (tab === 'calls') {
       var logs = (p.callLogs || []).slice().reverse();
       if (!logs.length) return emptyState('No calls logged yet', '📞');
@@ -1617,11 +1687,33 @@
     callingList(body);
   }
 
+  /* Same-day call discipline: agents see what is left before the day closes. */
+  function loadDayBanner() {
+    var myId = state.user.agentId;
+    if (!myId) return;
+    api('calling.dayStatus', {}, { background: true }).then(function (r) {
+      var me = (r.agents || []).filter(function (x) { return x.agentId === myId; })[0], el = $('#day-banner');
+      if (!me || !el) return;
+      var left = me.pendingToday + me.overdue, total = me.dueToday + me.overdue, done = me.completedToday;
+      var pctDone = total ? Math.round(done / total * 100) : 100, end = r.dayEndHour + ':00';
+      el.innerHTML = '<div class="day-banner ' + (left ? (r.closedToday ? 'late' : 'open') : 'done') + '"><div class="db-main"><b>' +
+        (left ? '⏰ ' + left + ' call' + (left > 1 ? 's' : '') + ' left today' : '✅ All calls done for today – great work!') + '</b><span>' +
+        (left ? me.pendingToday + ' due today + ' + me.overdue + ' overdue · ' + (r.closedToday ? 'the day is closed and your manager has been informed – finish these first.' : 'complete them before <b>' + end + '</b>, after that your manager is notified.') : done + ' of ' + me.dueToday + ' due today completed · ' + me.callsLogged + ' calls logged') +
+        '</span></div><div class="db-bar"><i style="width:' + pctDone + '%"></i></div><div class="db-pct">' + done + ' / ' + total + ' done</div>' + (left ? '<button class="btn btn-sm btn-primary" data-show-pending>Show pending</button>' : '') + '</div>';
+      var sp = $('[data-show-pending]', el); if (sp) sp.onclick = function () { go('calling', { tab: 'list', preset: 'all', status: 'Pending', agentId: myId }); };
+      // once-per-day popup for agents who still have calls open
+      var key = 'glp_daypop_' + r.date, seen = false;
+      try { seen = sessionStorage.getItem(key) === '1'; sessionStorage.setItem(key, '1'); } catch (e) {}
+      if (left && !seen && isAgent()) modal({ title: '⏰ ' + left + ' call' + (left > 1 ? 's' : '') + ' to finish today', size: 'sm',
+        body: '<p>You have <b>' + me.pendingToday + '</b> call(s) due today and <b>' + me.overdue + '</b> overdue.</p><p>All calls must be completed the same day. ' + (r.closedToday ? 'Today has already closed and your manager was informed.' : 'At <b>' + end + '</b> the day closes and your manager is notified of any calls still pending.') + '</p>', footer: '<button class="btn btn-primary" data-close>Start calling</button>' });
+    }).catch(function () {});
+  }
+
   function callingList(body) {
     var p = state.params;
     var companies = (state.meta.companies || []).map(function (c) { return { value: c.id, label: c.name }; });
     var defAgent = p.agentId !== undefined ? p.agentId : (state.user.agentId || '');
-    body.innerHTML = '<div class="stack"><div id="call-kpis">' + skeleton(1) + '</div><div class="card"><div class="card-body"><form class="toolbar" id="call-filters">' +
+    body.innerHTML = '<div class="stack"><div id="day-banner"></div><div id="call-kpis">' + skeleton(1) + '</div><div class="card"><div class="card-body"><form class="toolbar" id="call-filters">' +
       field({ name: 'preset', label: 'Period', type: 'select', value: p.preset || 'today', options: [{ value: 'today', label: 'Today' }, { value: 'this_week', label: 'This week' }, { value: 'last_week', label: 'Last week' }, { value: 'this_month', label: 'This month' }, { value: 'last_month', label: 'Last month' }, { value: 'custom', label: 'Custom range' }, { value: 'all', label: 'All time' }], noPlaceholder: true, required: true }) +
       field({ name: 'from', label: 'From date', type: 'date', value: p.from }) + field({ name: 'to', label: 'To date', type: 'date', value: p.to }) +
       field({ name: 'dateField', label: 'Date applies to', type: 'select', required: true, noPlaceholder: true, value: p.dateField || 'due', options: [{ value: 'due', label: 'Call due date' }, { value: 'called', label: 'Call logged date' }] }) +
@@ -1633,6 +1725,7 @@
       field({ name: 'q', label: 'Search', placeholder: 'Ref ID, name, or mobile', value: p.q, attrs: ' type="search"' }).replace('class="field', 'class="field search') +
       '<button type="button" class="btn" data-clear>Clear filters</button><span class="muted small grow right" id="call-count"></span></form></div></div>' +
       '<div class="card"><div class="card-body flush" id="call-table">' + skeleton(1) + '</div></div></div>';
+    loadDayBanner();
     var form = $('#call-filters');
     var load = function () {
       var f = readForm(form);
@@ -1696,6 +1789,7 @@
       (j.status !== 'Stopped' && !isLeadC ? '<button class="btn" data-cj="extend">⏩ Extend journey</button>' : '') +
       '<button class="btn" data-cj="note">📝 Note for partner</button><button class="btn" data-cj="profile">👤 Full profile</button>' +
       (isAdmin() ? '<button class="btn" data-cj="reassign">🔁 Reassign agent</button>' : '') + '</div>';
+    html += '<div class="row"><button class="btn" data-cj="discuss">💬 Discussion with partner</button><span class="muted small">Message the partner about this client – they get a 🔔 update.</span></div>';
     var partnerNotes = d.notes.filter(function (n) { return n.Note_Type !== 'AGENT' && n.Note_Type !== 'INTERNAL'; }).slice(0, 3);
     var agentNotes = d.notes.filter(function (n) { return n.Note_Type === 'AGENT' || n.Note_Type === 'INTERNAL'; }).slice(0, 3);
     if (partnerNotes.length || agentNotes.length) {
@@ -1717,6 +1811,7 @@
     on('start', function () { withClient(v.clientId, startJourneyModal); });
     on('note', function () { withClient(v.clientId, noteModal); });
     on('profile', function () { openClientProfile(v.clientId); });
+    on('discuss', function () { openClientProfile(v.clientId, 'discussion'); });
     on('reassign', function () {
       formModal({ title: 'Reassign agent', size: 'sm', submitLabel: 'Reassign', subtitle: esc(v.fullName),
         body: field({ name: 'agentId', label: 'Agent', type: 'select', required: true, options: agentOptions(false), value: d.agent ? d.agent.id : '' }),
@@ -1795,14 +1890,18 @@
         $('#perf-call-body').innerHTML = '<div class="stack"><div class="kpis">' + kpi('Calls logged', num(tot('calls')), 'navy') + kpi('Connected', num(tot('connected')), 'green', tot('calls') ? Math.round(tot('connected') / tot('calls') * 100) + '% connect rate' : '') +
           kpi('Calls due (to date)', num(tot('due')), '', num(tot('dueDone')) + ' done') + kpi('Overdue now', num(tot('overdueNow')), 'red') +
           kpi('Refills converted on calls', num(tot('converted')), 'purple', money(tot('convertedAmount'), cur)) + kpi('Refills recorded by agents', num(tot('refillsRecorded')), 'purple', money(tot('refillsRecordedAmount'), cur)) + '</div>' +
+          '<div class="section-title"><h2>Unpaid leads follow-up</h2><span class="muted small">Consultation-only clients assigned to agents in this period</span></div><div class="kpis">' +
+          kpi('Leads assigned', num(tot('leadsAssigned')), 'navy') + kpi('Contacted', num(tot('leadsContacted')), '', tot('leadsAssigned') ? Math.round(tot('leadsContacted') / tot('leadsAssigned') * 100) + '% of assigned' : '') +
+          kpi('Paid & journey started', num(tot('leadsConverted')), 'green', tot('leadsAssigned') ? Math.round(tot('leadsConverted') / tot('leadsAssigned') * 100) + '% conversion' : '') +
+          kpi('Still unpaid', num(tot('leadsOpen')), 'grey') + kpi('Revenue from converted leads', money(tot('leadRevenue'), cur), 'purple') + '</div>' +
           '<div class="card"><div class="card-head"><h2>Agent performance</h2><span class="muted small">' + (r.from ? fmtDate(r.from) + ' → ' + fmtDate(r.to) : 'All time') + '</span></div><div class="card-body flush"><div class="table-wrap"><table class="table"><thead><tr>' +
-          '<th>Agent</th><th class="num">Clients</th><th class="num">Calls due</th><th class="num">Done</th><th class="num">Completion</th><th class="num">Calls logged</th><th class="num">Connected</th><th class="num">Connect rate</th><th class="num">Clients called</th><th class="num">Refills converted</th><th class="num">Refills recorded</th><th class="num">Leads (assigned / converted)</th><th class="num">Extensions</th><th class="num">Overdue now</th><th class="num">Pending today</th></tr></thead><tbody>' +
+          '<th>Agent</th><th class="num">Clients</th><th class="num">Calls due</th><th class="num">Done</th><th class="num">Completion</th><th class="num">Calls logged</th><th class="num">Connected</th><th class="num">Connect rate</th><th class="num">Clients called</th><th class="num">Refills converted</th><th class="num">Refills recorded</th><th class="num">Leads assigned</th><th class="num">Contacted</th><th class="num">Paid & started</th><th class="num">Lead conv.</th><th class="num">Lead revenue</th><th class="num">Extensions</th><th class="num">Overdue now</th><th class="num">Pending today</th><th class="num" title="Days the agent day closed with calls still pending">Days closed w/ pending</th><th class="num">Calls left at close</th></tr></thead><tbody>' +
           (A.length ? A.map(function (x) {
             return '<tr><td><div class="cell-title">' + esc(x.name) + (x.status !== 'Active' ? ' ' + badge('Inactive', 'grey') : '') + '</div><div class="cell-sub">' + esc(x.email) + '</div></td><td class="num">' + num(x.activeClients) + ' / ' + num(x.clients) + '</td><td class="num">' + num(x.due) + '</td><td class="num">' + num(x.dueDone) + '</td><td class="num">' + pct(x.completionRate) + '</td>' +
               '<td class="num strong">' + num(x.calls) + '</td><td class="num">' + num(x.connected) + '</td><td class="num">' + pct(x.connectRate) + '</td><td class="num">' + num(x.clientsCalled) + '</td>' +
-              '<td class="num">' + num(x.converted) + '<div class="cell-sub">' + money(x.convertedAmount, cur) + '</div></td><td class="num">' + num(x.refillsRecorded) + '<div class="cell-sub">' + money(x.refillsRecordedAmount, cur) + '</div></td><td class="num">' + num(x.leadsAssigned) + ' / <b>' + num(x.leadsConverted) + '</b></td><td class="num">' + num(x.extensions) + '</td>' +
-              '<td class="num">' + (x.overdueNow ? '<b style="color:var(--red)">' + num(x.overdueNow) + '</b>' : 0) + '</td><td class="num">' + num(x.pendingToday) + '</td></tr>';
-          }).join('') : '<tr><td colspan="15">' + emptyState('No agents yet') + '</td></tr>') + '</tbody></table></div></div></div>' +
+              '<td class="num">' + num(x.converted) + '<div class="cell-sub">' + money(x.convertedAmount, cur) + '</div></td><td class="num">' + num(x.refillsRecorded) + '<div class="cell-sub">' + money(x.refillsRecordedAmount, cur) + '</div></td><td class="num">' + num(x.leadsAssigned) + '</td><td class="num">' + num(x.leadsContacted) + '</td><td class="num"><b>' + num(x.leadsConverted) + '</b></td><td class="num">' + pct(x.leadConvRate) + '</td><td class="num">' + money(x.leadRevenue, cur) + '</td><td class="num">' + num(x.extensions) + '</td>' +
+              '<td class="num">' + (x.overdueNow ? '<b style="color:var(--red)">' + num(x.overdueNow) + '</b>' : 0) + '</td><td class="num">' + num(x.pendingToday) + '</td><td class="num">' + (x.daysWithPending ? '<b style="color:var(--red)">' + num(x.daysWithPending) + '</b>' : 0) + ' / ' + num(x.daysClosed) + '</td><td class="num">' + num(x.pendingAtClose) + '</td></tr>';
+          }).join('') : '<tr><td colspan="21">' + emptyState('No agents yet') + '</td></tr>') + '</tbody></table></div></div></div>' +
           '<div class="grid-2">' + chartBox('ch-agent-calls', 'Calls by agent', 'Logged vs connected') + chartBox('ch-agent-refills', 'Refill value by agent', 'Converted on calls vs recorded') + '</div></div>';
         var names = A.map(function (x) { return x.name; });
         makeChart('ch-agent-calls', 'bar', names, [{ label: 'Calls logged', data: A.map(function (x) { return x.calls; }), color: PALETTE[0] }, { label: 'Connected', data: A.map(function (x) { return x.connected; }), color: PALETTE[3] }, { label: 'Calls due', data: A.map(function (x) { return x.due; }), color: PALETTE[2] }]);
@@ -1815,11 +1914,24 @@
 
   function callingAgents(body) {
     body.innerHTML = skeleton(2);
-    api('agents.list').then(function (r) {
-      body.innerHTML = '<div class="stack"><div class="alert alert-info">Agents sign in on this admin page with <b>Sign in with Google</b> using their @justlife.com account and only see Agent Calling. New clients are assigned in rotation (agent 1 → 2 → 3 → 1…). Next in rotation: <b>' + esc(r.nextInRotation || '—') + '</b>. <b>Every Monday</b> clients who had a consultation but have not paid for 7+ days are shared out the same way, and each agent gets an email. If someone is also an active Admin, they sign in as Admin and can still filter their own calls.</div>' +
+    Promise.all([api('agents.list'), api('calling.dayStatus').catch(function () { return { agents: [] }; })]).then(function (res) {
+      var r = res[0], ds = res[1], today = {};
+      (ds.agents || []).forEach(function (x) { today[x.agentId] = x; });
+      var withPending = (ds.agents || []).filter(function (x) { return x.pendingToday + x.overdue > 0; });
+      var todayCell = function (id) {
+        var x = today[id]; if (!x) return '<span class="muted">—</span>';
+        var left = x.pendingToday + x.overdue;
+        return left ? '<span class="b-warn">⚠ ' + left + ' pending</span><div class="cell-sub">' + x.completedToday + '/' + x.dueToday + ' due done · ' + x.overdue + ' overdue</div>' : '<span class="b-ok">✓ All done</span><div class="cell-sub">' + x.completedToday + '/' + x.dueToday + ' due done · ' + x.callsLogged + ' logged</div>';
+      };
+      body.innerHTML = '<div class="stack">' +
+        '<div class="card"><div class="card-head"><h2>Today’s calls</h2><span class="muted small">' + (ds.closedToday ? 'Day closed' : 'Day closes at ' + (ds.dayEndHour != null ? ds.dayEndHour : 20) + ':00 · reminder at ' + (ds.reminderHour != null ? ds.reminderHour : 16) + ':00') + '</span>' +
+        '<button class="btn btn-sm" data-remind-agents>⏰ Send pending-call reminder now</button><button class="btn btn-sm btn-primary" data-close-day>🌙 Close day now</button></div><div class="card-body">' +
+        (withPending.length ? '<div class="alert alert-warn"><b>' + withPending.length + ' agent(s) still have calls pending:</b> ' + withPending.map(function (x) { return esc(x.name) + ' (' + (x.pendingToday + x.overdue) + ')'; }).join(', ') + '</div>' : '<div class="alert alert-success">✓ Every agent has completed today’s calls.</div>') +
+        '<p class="muted small">Agents must finish every call the same day. At the reminder hour agents with open calls get a 🔔 update and an email; when the day closes, admins get a 🔔 update (and an email to <i>ADMIN_REMINDER_EMAILS</i> in Settings) listing which agents left calls pending. Hours are in Settings: AGENT_REMINDER_HOUR, AGENT_DAY_END_HOUR.</p></div></div>' +
+        '<div class="alert alert-info">Agents sign in on this admin page with <b>Sign in with Google</b> using their @justlife.com account and only see Agent Calling. New clients are assigned in rotation (agent 1 → 2 → 3 → 1…). Next in rotation: <b>' + esc(r.nextInRotation || '—') + '</b>. <b>Every Monday</b> clients who had a consultation but have not paid for 7+ days are shared out the same way, and each agent gets an email. If someone is also an active Admin, they sign in as Admin and can still filter their own calls.</div>' +
         '<div class="card"><div class="card-head"><h2>Agents</h2><button class="btn btn-sm" data-assign-leads title="Consultation-only clients unpaid for 7+ days">📋 Assign unpaid leads now</button><button class="btn btn-sm" data-assign-all>🔁 Assign unassigned clients</button><button class="btn btn-sm btn-primary" data-add-agent>＋ Add agent</button></div><div class="card-body flush">' +
-        (r.agents.length ? '<div class="table-wrap"><table class="table"><thead><tr><th>#</th><th>Agent</th><th>Status</th><th class="num">Assigned clients</th><th>Last sign-in</th><th></th></tr></thead><tbody>' + r.agents.map(function (g, i) {
-          return '<tr><td>' + (i + 1) + '</td><td><div class="cell-title">' + esc(g.Full_Name) + '</div><div class="cell-sub">' + esc(g.Email) + (g.Phone ? ' · ' + esc(g.Phone) : '') + '</div></td><td>' + badge(g.Status, g.Status === 'Active' ? 'green' : 'grey') + '</td><td class="num">' + num(g.clientCount) + '</td><td class="nowrap">' + fmtDateTime(g.Last_Login_At) + '</td>' +
+        (r.agents.length ? '<div class="table-wrap"><table class="table"><thead><tr><th>#</th><th>Agent</th><th>Status</th><th class="num">Assigned clients</th><th>Today</th><th>Last sign-in</th><th></th></tr></thead><tbody>' + r.agents.map(function (g, i) {
+          return '<tr><td>' + (i + 1) + '</td><td><div class="cell-title">' + esc(g.Full_Name) + '</div><div class="cell-sub">' + esc(g.Email) + (g.Phone ? ' · ' + esc(g.Phone) : '') + '</div></td><td>' + badge(g.Status, g.Status === 'Active' ? 'green' : 'grey') + '</td><td class="num">' + num(g.clientCount) + '</td><td>' + (g.Status === 'Active' ? todayCell(g.Agent_ID) : '<span class="muted">—</span>') + '</td><td class="nowrap">' + fmtDateTime(g.Last_Login_At) + '</td>' +
             '<td class="nowrap"><button class="btn btn-sm" data-ag-edit="' + esc(g.Agent_ID) + '">Edit</button> <button class="btn btn-sm ' + (g.Status === 'Active' ? 'btn-danger' : 'btn-success') + '" data-ag-status="' + esc(g.Agent_ID) + '">' + (g.Status === 'Active' ? 'Deactivate' : 'Activate') + '</button></td></tr>';
         }).join('') + '</tbody></table></div>' : emptyState('No agents yet – add your first agent', '🎧')) + '</div></div></div>';
       var find = function (id) { return r.agents.filter(function (g) { return g.Agent_ID === id; })[0]; };
@@ -1834,6 +1946,16 @@
             .catch(function (e) { toast(e.message, 'error'); });
         };
       });
+      $('[data-remind-agents]', body).onclick = function () {
+        confirmBox({ title: 'Remind agents now?', message: 'Every agent with calls still pending today gets a 🔔 update and an email.', confirmLabel: 'Send reminder' })
+          .then(function (ok) { if (ok) return api('calling.remindAgents', {}, { requestId: uuid() }).then(function (x) { toast(x.reminded ? x.reminded + ' agent(s) reminded' : 'No agent has pending calls', 'success'); }); })
+          .catch(function (e) { toast(e.message, 'error'); });
+      };
+      $('[data-close-day]', body).onclick = function () {
+        confirmBox({ title: 'Close today for agents?', message: 'Saves today’s result per agent and notifies admins about every agent with calls still pending. This also runs automatically at the day-end hour.', confirmLabel: 'Close day' })
+          .then(function (ok) { if (ok) return api('calling.dayClose', {}, { requestId: uuid() }).then(function (x) { toast(x.withPending.length ? 'Day closed – ' + x.withPending.length + ' agent(s) with pending calls, admins notified' : 'Day closed – all calls done', x.withPending.length ? 'info' : 'success'); reload(); refreshInbox(); }); })
+          .catch(function (e) { toast(e.message, 'error'); });
+      };
       $('[data-assign-leads]', body).onclick = function () {
         confirmBox({ title: 'Assign unpaid leads now?', message: 'Consultation-only clients still unpaid after 7 days are shared equally between active agents, and each agent is emailed their list. This also runs automatically every Monday.', confirmLabel: 'Assign now' })
           .then(function (ok) { if (ok) return api('calling.assignLeads', {}, { requestId: uuid() }).then(function (x) { toast(x.assigned + ' lead(s) assigned · ' + x.emailed + ' agent email(s)', 'success'); reload(); }); })
